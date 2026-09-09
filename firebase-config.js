@@ -1,5 +1,8 @@
-const firebaseConfig = {
-  apiKey: "AIzaSyBeXDnYD7Oa6CISrPlFPetO1vzLtlryOeg",
+// firebase-config.js
+// Firebase is an optional cloud-sync adapter. Local mode must work when the
+// CDN is unavailable or this client config is not configured for the host.
+const FIREBASE_CONFIG = {
+  apiKey: "«reda...…»",
   authDomain: "general-manager-app.firebaseapp.com",
   projectId: "general-manager-app",
   storageBucket: "general-manager-app.firebasestorage.app",
@@ -8,7 +11,18 @@ const firebaseConfig = {
   measurementId: "G-CW908MTENS"
 };
 
-// Initialize Firebase using the Compat SDK
-const app = firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
+let firebaseApp = null;
+let auth = null;
+let db = null;
+
+if (typeof firebase !== 'undefined') {
+  try {
+    firebaseApp = firebase.initializeApp(FIREBASE_CONFIG);
+    auth = firebase.auth();
+    db = firebase.firestore();
+  } catch (error) {
+    console.warn('Firebase sync is unavailable; continuing in local mode.', error);
+  }
+} else {
+  console.warn('Firebase SDK was not loaded; continuing in local mode.');
+}

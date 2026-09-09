@@ -1178,9 +1178,159 @@ body {
   font-size: 11px;
   color: var(--text-muted);
 }
+/* ═══════════════════════════════════════════════════════════
+   PRODUCTIVE WORKSPACE REFINEMENT
+   ═══════════════════════════════════════════════════════════ */
+:root {
+  --bg-page: #0f1318;
+  --bg-card: #1a2128;
+  --bg-panel: #141a20;
+  --bg-input: #1a2128;
+  --border-color: #303944;
+  --accent-purple: #8496aa;
+  --accent-purple-dim: rgba(132, 150, 170, 0.14);
+}
+body { background: var(--bg-page); }
+#top-bar, #toolbar {
+  background: #12171d;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.column {
+  background: #151b21;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: #303944;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.24);
+}
+.card,
+.archive-item {
+  background: #1a2128;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+.card[data-type] { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28); }
+.card:hover {
+  transform: none;
+  translate: none;
+  border-color: #536477;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.34);
+}
+.card-tag.type-tag[data-type],
+.card-tag.type-tag[data-type="AGENT"],
+.card-tag.type-tag[data-type="RESEARCH"],
+.card-tag.type-tag[data-type="REPO"],
+.card-tag.type-tag[data-type="URL"],
+.card-tag.type-tag[data-type="NOTE"],
+.card-tag.type-tag[data-type="IDEA"] { box-shadow: none; }
+.btn-primary {
+  background: #53687c;
+  box-shadow: none;
+}
+.btn-primary:hover {
+  background: #60778d;
+  box-shadow: none;
+  transform: none;
+}
+#modal, #context-menu, #ai-panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.btn-ghost.active { box-shadow: none; }
+.workspace-status {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  padding-left: 4px;
+}
+.workspace-status.status-warning { color: var(--priority-med); }
+.ai-privacy-note {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 5px;
+}
+.ctx-item:disabled { opacity: 0.55; cursor: not-allowed; }
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-purple);
+  outline-offset: 2px;
+}
+#small-screen-notice { display: none; }
+
+@media (max-width: 700px) {
+  html, body {
+    min-height: 100%;
+    height: auto;
+    overflow: auto;
+    background: #0f1318;
+  }
+  #app { display: none; }
+  #small-screen-notice {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .small-screen-card {
+    width: min(430px, 100%);
+    background: #151b21;
+    border: 1px solid #303944;
+    border-radius: 12px;
+    padding: 28px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+  }
+  .small-screen-kicker {
+    color: var(--accent-purple);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .small-screen-card h1 {
+    color: var(--text-primary);
+    font-size: clamp(25px, 7vw, 34px);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    margin-bottom: 14px;
+  }
+  .small-screen-card p {
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .small-screen-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+  }
+  .small-screen-details span {
+    border: 1px solid #3b4652;
+    border-radius: 999px;
+    color: #b8c4d0;
+    font-size: 11px;
+    padding: 5px 9px;
+  }
+}
 </style>
 </head>
 <body>
+<div id="small-screen-notice" role="main" aria-labelledby="small-screen-title">
+  <div class="small-screen-card">
+    <div class="small-screen-kicker">GeneralManager</div>
+    <h1 id="small-screen-title">Designed for desktop workspaces.</h1>
+    <p>Open GeneralManager on a larger screen for the full board experience. Your local workspace remains available on this device.</p>
+    <div class="small-screen-details">
+      <span>Local-first</span>
+      <span>No account required</span>
+    </div>
+  </div>
+</div>
 <div id="app">
   <!-- TOP BAR: Board title + Quick Capture + AI toggle -->
   <div id="top-bar">
@@ -1188,19 +1338,21 @@ body {
     <div id="quick-capture">
       <input type="text" id="quick-input" placeholder='Capture a context, task, URL, repo, or idea…  ( / )' spellcheck="false" aria-label="Quick capture input">
       <select id="quick-type-select" aria-label="Card type">
-        <option value="NOTE">📝 Note</option>
-        <option value="AGENT">🤖 Agent</option>
-        <option value="RESEARCH">🔬 Research</option>
-        <option value="REPO">📦 Repo</option>
-        <option value="URL">🔗 URL</option>
-        <option value="IDEA">💡 Idea</option>
+        <option value="NOTE">Note</option>
+        <option value="AGENT">Agent</option>
+        <option value="RESEARCH">Research</option>
+        <option value="REPO">Repo</option>
+        <option value="URL">URL</option>
+        <option value="IDEA">Idea</option>
       </select>
       <button class="btn btn-primary" id="quick-add-btn">+ Add</button>
     </div>
-    <button class="btn btn-ghost" id="ai-toggle-btn" title="Toggle AI Panel (A)">🧠 AI</button>
+    <button class="btn btn-ghost" id="ai-toggle-btn" title="Toggle AI Panel (A)">AI</button>
+    <span id="workspace-status" class="workspace-status" aria-live="polite">Local workspace</span>
+    <button class="btn btn-ghost btn-sm" id="auth-btn">Sign in to sync</button>
     <div id="user-profile" style="display:none; align-items:center; gap:8px; margin-left:8px; flex-shrink:0;">
       <span id="user-email" style="font-size:12px; color:var(--text-muted); font-weight: 500; overflow:hidden; text-overflow:ellipsis; max-width:140px; white-space:nowrap;"></span>
-      <button class="btn btn-ghost btn-sm" id="logout-btn" title="Log Out" style="padding: 4px 8px;">Sign Out</button>
+      <button class="btn btn-ghost btn-sm" id="logout-btn" title="Sign out" style="padding: 4px 8px;">Sign out</button>
     </div>
   </div>
 
@@ -1211,12 +1363,12 @@ body {
     <div class="filter-group">
       <span class="label">Type</span>
       <button class="btn btn-ghost btn-sm type-filter active" data-type="ALL">All</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="AGENT" title="Agent">🤖</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="RESEARCH" title="Research">🔬</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="REPO" title="Repo">📦</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="URL" title="URL">🔗</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="NOTE" title="Note">📝</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="IDEA" title="Idea">💡</button>
+      <button class="btn btn-ghost btn-sm type-filter" data-type="AGENT" title="Agent">Agent</button>
+      <button class="btn btn-ghost btn-sm type-filter" data-type="RESEARCH" title="Research">Research</button>
+      <button class="btn btn-ghost btn-sm type-filter" data-type="REPO" title="Repo">Repo</button>
+      <button class="btn btn-ghost btn-sm type-filter" data-type="URL" title="URL">URL</button>
+      <button class="btn btn-ghost btn-sm type-filter" data-type="NOTE" title="Note">Note</button>
+      <button class="btn btn-ghost btn-sm type-filter" data-type="IDEA" title="Idea">Idea</button>
     </div>
     <div class="toolbar-separator"></div>
     <div class="filter-group">
@@ -1227,11 +1379,11 @@ body {
       <button class="btn btn-ghost btn-sm priority-filter" data-priority="LOW">Low</button>
     </div>
     <div class="toolbar-right">
-      <button class="btn btn-ghost btn-sm" id="archive-view-btn" title="View archived cards">📦 Archive</button>
-      <button class="btn btn-ghost btn-sm" id="export-btn" title="Export board as JSON">📥 Export</button>
-      <button class="btn btn-ghost btn-sm" id="import-btn" title="Import board from JSON">📤 Import</button>
+      <button class="btn btn-ghost btn-sm" id="archive-view-btn" title="View archived cards">Archive</button>
+      <button class="btn btn-ghost btn-sm" id="export-btn" title="Export board as JSON">Export</button>
+      <button class="btn btn-ghost btn-sm" id="import-btn" title="Import board from JSON">Import</button>
       <input type="file" id="import-file" accept=".json" style="display:none">
-      <button class="btn btn-ghost btn-sm" id="clear-done-btn" title="Archive all Done cards">🧹 Clear Done</button>
+      <button class="btn btn-ghost btn-sm" id="clear-done-btn" title="Archive all Done cards">Clear Done</button>
     </div>
   </div>
 
@@ -1265,8 +1417,9 @@ body {
             <label>API Key</label>
             <div class="api-key-wrapper">
               <input type="password" id="ai-api-key" placeholder="sk-…" spellcheck="false" autocomplete="off">
-              <button class="api-key-toggle" id="api-key-toggle" type="button" title="Toggle visibility">👁</button>
+              <button class="api-key-toggle" id="api-key-toggle" type="button" title="Toggle visibility">Show</button>
             </div>
+            <p class="ai-privacy-note">Stored on this device. Avoid persistent API keys on shared browsers.</p>
           </div>
           <div class="ai-field">
             <label>Model</label>
@@ -1280,10 +1433,10 @@ body {
         <div class="ai-section">
           <div class="ai-section-title">Actions</div>
           <div class="ai-actions">
-            <button class="ai-action-btn" data-action="summarize">📋 Summarize Board</button>
-            <button class="ai-action-btn" data-action="priority">🎯 Suggest Priority</button>
-            <button class="ai-action-btn" data-action="stalled">⚠️ Find Stalled</button>
-            <button class="ai-action-btn" data-action="standup">📢 Generate Standup</button>
+            <button class="ai-action-btn" data-action="summarize">Summarize board</button>
+            <button class="ai-action-btn" data-action="priority">Suggest priority</button>
+            <button class="ai-action-btn" data-action="stalled">Find stalled cards</button>
+            <button class="ai-action-btn" data-action="standup">Generate standup</button>
           </div>
         </div>
 
@@ -1322,7 +1475,7 @@ body {
       <!-- Archived cards rendered here -->
     </div>
     <div class="modal-footer" style="display:flex; justify-content:space-between; gap:8px; margin-top:20px; padding-top:16px; border-top:1px solid var(--border-color);">
-      <button class="btn btn-ghost" id="archive-empty-btn" style="color:var(--priority-high)">🗑 Empty Archive</button>
+      <button class="btn btn-ghost" id="archive-empty-btn" style="color:var(--priority-high)">Empty Archive</button>
       <button class="btn btn-primary" id="archive-modal-close-btn">Done</button>
     </div>
   </div>
@@ -1339,20 +1492,20 @@ body {
       <div class="modal-field">
         <label>Type</label>
         <select id="modal-type">
-          <option value="AGENT">🤖 Agent</option>
-          <option value="RESEARCH">🔬 Research</option>
-          <option value="REPO">📦 Repo</option>
-          <option value="URL">🔗 URL</option>
-          <option value="NOTE">📝 Note</option>
-          <option value="IDEA">💡 Idea</option>
+          <option value="AGENT">Agent</option>
+          <option value="RESEARCH">Research</option>
+          <option value="REPO">Repo</option>
+          <option value="URL">URL</option>
+          <option value="NOTE">Note</option>
+          <option value="IDEA">Idea</option>
         </select>
       </div>
       <div class="modal-field">
         <label>Priority</label>
         <select id="modal-priority">
-          <option value="HIGH">🔴 High</option>
-          <option value="MED">🟡 Medium</option>
-          <option value="LOW">⚫ Low</option>
+          <option value="HIGH">High</option>
+          <option value="MED">Medium</option>
+          <option value="LOW">Low</option>
         </select>
       </div>
     </div>
@@ -1389,8 +1542,8 @@ body {
       <span id="modal-updated"></span>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" id="modal-delete-btn">🗑 Delete</button>
-      <button class="btn btn-ghost" id="modal-archive-btn">📦 Archive</button>
+      <button class="btn btn-ghost" id="modal-delete-btn">Delete</button>
+      <button class="btn btn-ghost" id="modal-archive-btn">Archive</button>
       <button class="btn btn-primary" id="modal-save-btn">Save Changes</button>
     </div>
   </div>

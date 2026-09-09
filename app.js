@@ -5,6 +5,10 @@ const TYPE_ICONS = { AGENT: '🤖', RESEARCH: '🔬', REPO: '📦', URL: '🔗',
 const PRIORITIES = ['HIGH', 'MED', 'LOW'];
 const MAX_COLUMNS = 8;
 const LS_SETTINGS = 'gm_settings';
+const LS_BOARD = 'gm_board';
+const LS_ARCHIVE = 'gm_archive';
+const LS_LOCAL_REVISION = 'gm_local_revision';
+const LS_CLOUD_CHOICE_PREFIX = 'gm_cloud_choice_';
 
 // Column Color Presets
 const COLUMN_COLORS = {
@@ -32,53 +36,166 @@ let archiveSearchQuery = '';
 let archiveModalOpen = false;
 
 let currentUser = null;
+let workspaceMode = 'local';
 let listenersInitialized = false;
+let authLoadGeneration = 0;
 
 // ═══════════════════════════════════════════════════════════
-// PERSISTENCE (Firestore adaptors)
+// PERSISTENCE (local-first, optional Firestore)
 // ═══════════════════════════════════════════════════════════
+function readLocalWorkspace() {
+  let storedBoard = null;
+  let storedArchive = [];
+
+  try {
+    storedBoard = localStorage.getItem(LS_BOARD);
+    const rawArchive = localStorage.getItem(LS_ARCHIVE);
+    storedArchive = rawArchive ? JSON.parse(rawArchive) : [];
+  } catch (error) {
+    console.warn('Local workspace could not be read; starting a fresh workspace.', error);
+  }
+
+  if (!storedBoard) {
+    return { board: createDefaultBoard(), archive: [] };
+  }
+
+  try {
+    const parsedBoard = ensureBoardInvariant(JSON.parse(storedBoard), { strict: false });
+    return {
+      board: parsedBoard,
+      archive: Array.isArray(storedArchive) ? storedArchive : []
+    };
+  } catch (error) {
+    console.warn('Stored workspace is invalid; starting a fresh workspace.', error);
+    return { board: createDefaultBoard(), archive: [] };
+  }
+}
+
+function saveLocalWorkspace() {
+  if (!board) return;
+  try {
+    localStorage.setItem(LS_BOARD, JSON.stringify(board));
+    localStorage.setItem(LS_ARCHIVE, JSON.stringify(archive));
+    const revision = Number(localStorage.getItem(LS_LOCAL_REVISION) || 0) + 1;
+    localStorage.setItem(LS_LOCAL_REVISION, String(revision));
+  } catch (error) {
+    console.error('Failed to save local workspace:', error);
+  }
+}
+
+function getLocalRevision() {
+  return Number(localStorage.getItem(LS_LOCAL_REVISION) || 0);
+}
+
+function hasMeaningfulLocalWorkspace(localWorkspace) {
+  return Boolean(localWorkspace && localWorkspace.board && !localWorkspace.board.meta?.isSeed)
+    || Boolean(localWorkspace && localWorkspace.archive && localWorkspace.archive.length);
+}
+
+function getCloudChoice(userId) {
+  try {
+    const raw = localStorage.getItem(LS_CLOUD_CHOICE_PREFIX + userId);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function rememberCloudChoice(userId, choice) {
+  try {
+    localStorage.setItem(LS_CLOUD_CHOICE_PREFIX + userId, JSON.stringify({
+      choice,
+      localRevision: getLocalRevision()
+    }));
+  } catch (error) {
+    console.warn('Could not remember cloud workspace choice.', error);
+  }
+}
+
+function updateWorkspaceStatus() {
+  const status = document.getElementById('workspace-status');
+  const authButton = document.getElementById('auth-btn');
+  const profile = document.getElementById('user-profile');
+  if (!status) return;
+
+  if (workspaceMode === 'cloud' && currentUser) {
+    status.textContent = 'Synced workspace';
+    status.classList.remove('status-warning');
+    if (authButton) authButton.style.display = 'none';
+    if (profile) profile.style.display = 'flex';
+  } else {
+    status.textContent = 'Local workspace';
+    if (authButton) authButton.style.display = 'inline-flex';
+    if (profile) profile.style.display = 'none';
+  }
+}
+
 function saveBoard() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoard(currentUser.uid, board);
-    }
+  if (!board) return;
+  board.meta = board.meta || {};
+  board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
+  board.meta.isSeed = false;
+  if (currentUser && workspaceMode === 'cloud') {
+    saveUserBoard(currentUser.uid, board);
+  } else {
+    saveLocalWorkspace();
   }
 }
 
 function saveBoardImmediate() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoardImmediate(currentUser.uid, board);
-    }
+  if (!board) return;
+  board.meta = board.meta || {};
+  board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
+  board.meta.isSeed = false;
+  if (currentUser && workspaceMode === 'cloud') {
+    saveUserBoardImmediate(currentUser.uid, board).catch(() => {});
+  } else {
+    saveLocalWorkspace();
   }
 }
 
 function loadSettings() {
   try {
     const raw = localStorage.getItem(LS_SETTINGS);
-    if (raw) { settings = JSON.parse(raw); return; }
-  } catch (e) { /* reset */ }
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      settings = {
+        baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : '',
+        apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
+        model: typeof parsed.model === 'string' ? parsed.model : ''
+      };
+      return;
+    }
+  } catch (error) {
+    console.warn('AI settings could not be read; resetting device-local settings.', error);
+  }
   settings = { baseUrl: '', apiKey: '', model: '' };
 }
 
 function saveSettings() {
-  settings.baseUrl = document.getElementById('ai-base-url').value;
+  settings.baseUrl = document.getElementById('ai-base-url').value.trim();
   settings.apiKey = document.getElementById('ai-api-key').value;
-  settings.model = document.getElementById('ai-model').value;
-  localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
+  settings.model = document.getElementById('ai-model').value.trim();
+  try {
+    localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
+  } catch (error) {
+    console.error('Failed to save AI settings locally:', error);
+  }
 }
 
 function saveArchive() {
-  if (currentUser) {
+  if (currentUser && workspaceMode === 'cloud') {
     saveUserArchive(currentUser.uid, archive);
+  } else {
+    saveLocalWorkspace();
   }
 }
 
 function saveArchiveImmediate() {
-  if (currentUser) {
-    saveUserArchiveImmediate(currentUser.uid, archive);
+  if (currentUser && workspaceMode === 'cloud') {
+    saveUserArchiveImmediate(currentUser.uid, archive).catch(() => {});
+  } else {
+    saveLocalWorkspace();
   }
 }
 
@@ -110,7 +227,101 @@ function createDefaultBoard() {
       aiModel: '', order: 0, createdAt: now - 172800000, updatedAt: now - 86400000
     }
   ];
-  return { columns: cols, cards: cards, meta: { boardTitle: 'GeneralManager', lastType: 'NOTE' } };
+  return { columns: cols, cards: cards, meta: { boardTitle: 'GeneralManager', lastType: 'NOTE', isSeed: true } };
+}
+
+function ensureBoardInvariant(candidate, { strict = true } = {}) {
+  if (!candidate || typeof candidate !== 'object' || !Array.isArray(candidate.columns)) {
+    throw new Error('Workspace data must include a columns array.');
+  }
+  if (candidate.columns.length < 1) {
+    throw new Error('A workspace must contain at least one column.');
+  }
+  if (candidate.columns.length > MAX_COLUMNS) {
+    throw new Error(`A workspace can contain at most ${MAX_COLUMNS} columns.`);
+  }
+
+  const seenColumnIds = new Set();
+  const columns = candidate.columns.map((rawColumn, index) => {
+    let id = typeof rawColumn?.id === 'string' && rawColumn.id.trim() ? rawColumn.id : crypto.randomUUID();
+    const name = typeof rawColumn?.name === 'string' && rawColumn.name.trim()
+      ? rawColumn.name.trim()
+      : `COLUMN ${index + 1}`;
+    if (seenColumnIds.has(id)) {
+      if (strict) throw new Error('Workspace contains duplicate column IDs.');
+      id = crypto.randomUUID();
+    }
+    seenColumnIds.add(id);
+    return {
+      ...rawColumn,
+      id,
+      name,
+      order: Number.isFinite(rawColumn?.order) ? rawColumn.order : index
+    };
+  }).sort((a, b) => a.order - b.order);
+  columns.forEach((column, index) => { column.order = index; });
+
+  if (!Array.isArray(candidate.cards)) {
+    throw new Error('Workspace data must include a cards array.');
+  }
+  const columnIds = new Set(columns.map(column => column.id));
+  const firstColumnId = columns[0].id;
+  const cards = candidate.cards.map((rawCard, index) => {
+    if (!rawCard || typeof rawCard !== 'object' || typeof rawCard.title !== 'string') {
+      if (strict) throw new Error(`Card ${index + 1} is invalid.`);
+      return null;
+    }
+    if (!columnIds.has(rawCard.columnId) && strict) {
+      throw new Error(`Card "${rawCard.title}" points to a missing column.`);
+    }
+    return {
+      ...rawCard,
+      id: typeof rawCard.id === 'string' && rawCard.id.trim() ? rawCard.id : crypto.randomUUID(),
+      title: rawCard.title.trim() || 'Untitled card',
+      columnId: columnIds.has(rawCard.columnId) ? rawCard.columnId : firstColumnId,
+      type: TYPES.includes(rawCard.type) ? rawCard.type : 'NOTE',
+      priority: PRIORITIES.includes(rawCard.priority) ? rawCard.priority : 'MED',
+      url: typeof rawCard.url === 'string' ? rawCard.url : '',
+      notes: typeof rawCard.notes === 'string' ? rawCard.notes : '',
+      order: Number.isFinite(rawCard.order) ? rawCard.order : index,
+      createdAt: Number.isFinite(rawCard.createdAt) ? rawCard.createdAt : Date.now(),
+      updatedAt: Number.isFinite(rawCard.updatedAt) ? rawCard.updatedAt : Date.now()
+    };
+  }).filter(Boolean);
+
+  return {
+    columns,
+    cards,
+    meta: {
+      ...(candidate.meta && typeof candidate.meta === 'object' ? candidate.meta : {}),
+      boardTitle: candidate.meta?.boardTitle || 'GeneralManager',
+      lastType: TYPES.includes(candidate.meta?.lastType) ? candidate.meta.lastType : 'NOTE'
+    }
+  };
+}
+
+function ensureBoardHasColumn() {
+  if (!board) return false;
+  if (!Array.isArray(board.columns) || board.columns.length === 0) {
+    board.columns = [{ id: crypto.randomUUID(), name: 'BACKLOG', order: 0 }];
+  }
+  board.columns.forEach((column, index) => { column.order = index; });
+  board.cards = Array.isArray(board.cards) ? board.cards : [];
+  board.meta = board.meta || { boardTitle: 'GeneralManager', lastType: 'NOTE' };
+  return true;
+}
+
+function normalizeArchive(candidate) {
+  if (!Array.isArray(candidate)) return [];
+  return candidate.filter(card => card && typeof card === 'object' && typeof card.title === 'string')
+    .map(card => ({
+      ...card,
+      id: typeof card.id === 'string' && card.id.trim() ? card.id : crypto.randomUUID(),
+      title: card.title.trim() || 'Untitled card',
+      notes: typeof card.notes === 'string' ? card.notes : '',
+      updatedAt: Number.isFinite(card.updatedAt) ? card.updatedAt : Date.now(),
+      createdAt: Number.isFinite(card.createdAt) ? card.createdAt : Date.now()
+    }));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -136,8 +347,14 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function isUrl(str) {
-  return /^https?:\/\//i.test(str.trim());
+function isHttpUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (error) {
+    return false;
+  }
 }
 
 function getCardsForColumn(colId) {
@@ -172,7 +389,8 @@ function renderBoard() {
   if (!container) return;
   container.innerHTML = '';
 
-  if (!board || !board.columns) return;
+  if (!board) return;
+  ensureBoardHasColumn();
 
   const sortedCols = [...board.columns].sort((a, b) => a.order - b.order);
 
@@ -446,12 +664,12 @@ function renderCard(card) {
   el.appendChild(meta);
 
   // URL
-  if (card.url) {
+  if (card.url && isHttpUrl(card.url)) {
     const urlLink = document.createElement('a');
     urlLink.className = 'card-url';
     urlLink.href = card.url;
     urlLink.target = '_blank';
-    urlLink.rel = 'noopener';
+    urlLink.rel = 'noopener noreferrer';
     urlLink.textContent = card.url;
     urlLink.addEventListener('click', (e) => e.stopPropagation());
     el.appendChild(urlLink);
@@ -480,18 +698,22 @@ function getDragAfterElement(container, y) {
 // CARD CRUD
 // ═══════════════════════════════════════════════════════════
 function createCard(title, type, columnId) {
-  const col = columnId || board.columns[0].id;
+  if (!board) return;
+  ensureBoardHasColumn();
+  const col = columnId && board.columns.some(column => column.id === columnId)
+    ? columnId
+    : board.columns[0].id;
   const now = Date.now();
   const colCards = getCardsForColumn(col);
   let url = '';
-  if (isUrl(title)) {
+  if (isHttpUrl(title)) {
     url = title.trim();
     type = 'URL';
   }
   const card = {
     id: crypto.randomUUID(),
     columnId: col,
-    type: type,
+    type: TYPES.includes(type) ? type : 'NOTE',
     title: title,
     url: url,
     notes: '',
@@ -502,7 +724,7 @@ function createCard(title, type, columnId) {
     updatedAt: now
   };
   board.cards.push(card);
-  board.meta.lastType = type;
+  board.meta.lastType = card.type;
   saveBoard();
   renderBoard();
 }
@@ -752,7 +974,11 @@ function showColumnContextMenu(e, colId) {
   });
   
   html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item danger" data-action="delete-col">🗑 Delete Column</button>';
+  if (board.columns.length > 1) {
+    html += '<button class="ctx-item danger" data-action="delete-col">Delete Column</button>';
+  } else {
+    html += '<button class="ctx-item" disabled title="At least one column is required">Delete disabled — keep one column</button>';
+  }
 
   menu.innerHTML = html;
   menu.classList.add('visible');
@@ -817,6 +1043,10 @@ function setColumnColor(colId, colorName) {
 }
 
 function deleteColumn(colId) {
+  if (!board || board.columns.length <= 1) {
+    alert('GeneralManager needs at least one column. Add another column before deleting this one.');
+    return;
+  }
   const col = board.columns.find(c => c.id === colId);
   if (!col) return;
   
@@ -922,19 +1152,19 @@ function renderArchiveList() {
 }
 
 function restoreCard(cardId) {
+  if (!board) return;
+  ensureBoardHasColumn();
   const idx = archive.findIndex(c => c.id === cardId);
   if (idx === -1) return;
   const card = archive.splice(idx, 1)[0];
-  
-  let colExists = board.columns.some(c => c.id === card.columnId);
-  if (!colExists) {
-    card.columnId = board.columns[0]?.id || '';
-  }
-  
+
+  const colExists = board.columns.some(c => c.id === card.columnId);
+  if (!colExists) card.columnId = board.columns[0].id;
+
   const colCards = getCardsForColumn(card.columnId);
   card.order = colCards.length;
   card.updatedAt = Date.now();
-  
+
   board.cards.push(card);
   saveBoard();
   saveArchive();
@@ -949,10 +1179,11 @@ function handleQuickCapture() {
   const input = document.getElementById('quick-input');
   const typeSelect = document.getElementById('quick-type-select');
   const title = input.value.trim();
-  if (!title) return;
+  if (!title || !board) return;
 
+  ensureBoardHasColumn();
   let type = typeSelect.value;
-  if (isUrl(title)) type = 'URL';
+  if (isHttpUrl(title)) type = 'URL';
 
   createCard(title, type, board.columns[0].id);
   input.value = '';
@@ -1022,54 +1253,61 @@ function importBoard(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(ev) {
+  reader.onload = function (event) {
     try {
-      const data = JSON.parse(ev.target.result);
-      if (!data.board || !data.board.columns || !data.board.cards) {
-        alert('Invalid GeneralManager backup file.');
-        return;
-      }
-      const mode = confirm('Click OK to REPLACE your board, or Cancel to MERGE with existing data.');
-      if (mode) {
-        // Replace
-        board = data.board;
-        if (data.archive) archive = data.archive;
+      const data = JSON.parse(event.target.result);
+      const importedBoard = ensureBoardInvariant(data.board, { strict: true });
+      const importedArchive = normalizeArchive(data.archive);
+      const replace = confirm('Click OK to REPLACE your board, or Cancel to merge new cards and columns.');
+
+      if (replace) {
+        board = importedBoard;
+        archive = importedArchive;
       } else {
-        // Merge
-        const existingColNames = new Set(board.columns.map(c => c.name));
-        for (const col of data.board.columns) {
-          if (!existingColNames.has(col.name)) {
-            col.order = board.columns.length;
-            board.columns.push(col);
-            existingColNames.add(col.name);
+        ensureBoardHasColumn();
+        const mergedColumns = board.columns.map(column => ({ ...column }));
+        const mergedCards = board.cards.map(card => ({ ...card }));
+        const mergedArchive = [...archive];
+        const columnMap = new Map();
+        for (const sourceColumn of importedBoard.columns) {
+          const existingColumn = mergedColumns.find(column => column.name === sourceColumn.name);
+          if (existingColumn) {
+            columnMap.set(sourceColumn.id, existingColumn.id);
+          } else {
+            const newColumn = { ...sourceColumn, id: crypto.randomUUID(), order: mergedColumns.length };
+            mergedColumns.push(newColumn);
+            columnMap.set(sourceColumn.id, newColumn.id);
           }
         }
-        const existingCardIds = new Set(board.cards.map(c => c.id));
-        for (const card of data.board.cards) {
-          if (!existingCardIds.has(card.id)) {
-            // Map to existing column by name
-            const srcCol = data.board.columns.find(c => c.id === card.columnId);
-            if (srcCol) {
-              const destCol = board.columns.find(c => c.name === srcCol.name);
-              if (destCol) card.columnId = destCol.id;
-              else card.columnId = board.columns[0].id;
-            }
-            board.cards.push(card);
-          }
+
+        const existingCardIds = new Set(mergedCards.map(card => card.id));
+        for (const sourceCard of importedBoard.cards) {
+          if (existingCardIds.has(sourceCard.id)) continue;
+          const destinationColumnId = columnMap.get(sourceCard.columnId) || mergedColumns[0].id;
+          const destinationOrder = mergedCards.filter(card => card.columnId === destinationColumnId).length;
+          mergedCards.push({
+            ...sourceCard,
+            columnId: destinationColumnId,
+            order: destinationOrder
+          });
+          existingCardIds.add(sourceCard.id);
         }
-        if (data.archive) {
-          const existingArchiveIds = new Set(archive.map(c => c.id));
-          for (const ac of data.archive) {
-            if (!existingArchiveIds.has(ac.id)) archive.push(ac);
-          }
+
+        const existingArchiveIds = new Set(mergedArchive.map(card => card.id));
+        for (const archivedCard of importedArchive) {
+          if (!existingArchiveIds.has(archivedCard.id)) mergedArchive.push(archivedCard);
         }
+        board = ensureBoardInvariant({ ...board, columns: mergedColumns, cards: mergedCards }, { strict: false });
+        archive = mergedArchive;
       }
+
+      board = ensureBoardInvariant(board, { strict: false });
       saveBoardImmediate();
       saveArchiveImmediate();
       renderBoard();
       document.getElementById('board-title').value = board.meta.boardTitle;
-    } catch (err) {
-      alert('Failed to parse JSON: ' + err.message);
+    } catch (error) {
+      alert('Import rejected: ' + error.message);
     }
   };
   reader.readAsText(file);
@@ -1113,7 +1351,10 @@ function initAIPanel() {
   // API key toggle
   document.getElementById('api-key-toggle').addEventListener('click', () => {
     const input = document.getElementById('ai-api-key');
-    input.type = input.type === 'password' ? 'text' : 'password';
+    const button = document.getElementById('api-key-toggle');
+    const isHidden = input.type === 'password';
+    input.type = isHidden ? 'text' : 'password';
+    button.textContent = isHidden ? 'Hide' : 'Show';
   });
 
   // Save settings on change
@@ -1170,12 +1411,20 @@ const AI_PROMPTS = {
   standup: 'Generate a standup: Yesterday (DONE cards), Today (ACTIVE), Blockers (PARKED). One tight paragraph.'
 };
 
+function getAIEndpoint() {
+  const baseUrl = (settings.baseUrl || '').trim().replace(/\/+$/, '');
+  return isHttpUrl(baseUrl) ? baseUrl + '/chat/completions' : '';
+}
+
 async function testConnection() {
   saveSettings();
   const status = document.getElementById('ai-status');
-  if (!settings.apiKey) {
+  const endpoint = getAIEndpoint();
+  if (!settings.apiKey || !endpoint) {
     status.className = 'ai-status visible error';
-    status.textContent = '❌ Configure API key first';
+    status.textContent = !settings.apiKey
+      ? 'Configure an API key first.'
+      : 'Enter a valid http(s) API base URL first.';
     return;
   }
   status.className = 'ai-status visible';
@@ -1184,7 +1433,7 @@ async function testConnection() {
   status.textContent = '🔌 Testing…';
 
   try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1223,9 +1472,12 @@ async function handleAIAction(action, customText) {
   saveSettings();
   const responsePane = document.getElementById('ai-response');
   responsePane.classList.add('visible');
+  const endpoint = getAIEndpoint();
 
-  if (!settings.apiKey) {
-    responsePane.innerHTML = '<span class="thinking">Configure API key in Settings first</span>';
+  if (!settings.apiKey || !endpoint) {
+    responsePane.innerHTML = '<span class="thinking">' + (!settings.apiKey
+      ? 'Configure an API key in Settings first.'
+      : 'Enter a valid http(s) API base URL in Settings first.') + '</span>';
     return;
   }
 
@@ -1240,7 +1492,7 @@ async function handleAIAction(action, customText) {
   responsePane.innerHTML = '<span class="thinking">Thinking…</span>';
 
   try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1422,7 +1674,7 @@ function initGlobalEvents() {
   // URL auto-detect in quick input
   document.getElementById('quick-input').addEventListener('input', (e) => {
     const val = e.target.value.trim();
-    if (isUrl(val)) {
+    if (isHttpUrl(val)) {
       document.getElementById('quick-type-select').value = 'URL';
     }
   });
@@ -1433,26 +1685,32 @@ function initGlobalEvents() {
     if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
   });
 
+  // Optional cloud sync
+  document.getElementById('auth-btn').addEventListener('click', showAuthModal);
+
   // Logout button
   document.getElementById('logout-btn').addEventListener('click', () => {
-    if (confirm('Sign out of your account?')) {
+    if (confirm('Sign out and return to your local workspace?')) {
       signOutUser();
     }
   });
 }
 
 // ═══════════════════════════════════════════════════════════
-// INITIALIZATION AND LIFECYCLE
+// INITIALIZATION AND WORKSPACE LIFECYCLE
 // ═══════════════════════════════════════════════════════════
 function initAppUI() {
+  if (!board) return;
+  board = ensureBoardInvariant(board, { strict: false });
+  archive = normalizeArchive(archive);
   document.getElementById('board-title').value = board.meta.boardTitle || 'GeneralManager';
 
-  // Set last-used type
   if (board.meta.lastType) {
     document.getElementById('quick-type-select').value = board.meta.lastType;
   }
 
   renderBoard();
+  updateWorkspaceStatus();
 
   if (!listenersInitialized) {
     initToolbar();
@@ -1463,72 +1721,123 @@ function initAppUI() {
   }
 }
 
-// Wire up auth state change to app state mapping
-onUserChanged(async (user) => {
+function applyLocalWorkspace(localWorkspace) {
+  currentUser = null;
+  workspaceMode = 'local';
+  board = localWorkspace.board;
+  archive = normalizeArchive(localWorkspace.archive);
+  initAppUI();
+}
+
+async function handleUserChanged(user) {
+  const generation = ++authLoadGeneration;
   currentUser = user;
-  if (user) {
-    // Show email and logout button
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) {
-      emailEl.textContent = user.email;
-      emailEl.title = user.email;
-    }
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) {
-      profileEl.style.display = 'flex';
-    }
+  loadSettings();
 
-    // Load settings from localStorage (remains local)
-    loadSettings();
-
-    try {
-      const data = await loadUserData(user.uid);
-      if (data.board) {
-        board = data.board;
-        archive = data.archive || [];
-      } else {
-        // No board in Firestore. Check for migration
-        if (hasLocalStorageData()) {
-          showMigrationBanner(user.uid, (migratedBoard, migratedArchive) => {
-            board = migratedBoard;
-            archive = migratedArchive;
-            initAppUI();
-          }, () => {
-            // Dismissed / skip migration
-            board = createDefaultBoard();
-            archive = [];
-            saveBoardImmediate();
-            saveArchiveImmediate();
-            initAppUI();
-          });
-          return; // Wait for banner interaction
-        } else {
-          // Fresh board
-          board = createDefaultBoard();
-          archive = [];
-          await Promise.all([
-            saveUserBoardImmediate(user.uid, board),
-            saveUserArchiveImmediate(user.uid, archive)
-          ]);
-        }
-      }
-      initAppUI();
-    } catch (err) {
-      console.error("Error loading user workspace:", err);
-      // Fallback
-      board = createDefaultBoard();
-      archive = [];
-      initAppUI();
-    }
-  } else {
-    // Logged out
-    board = null;
-    archive = [];
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) emailEl.textContent = '';
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) profileEl.style.display = 'none';
-    const container = document.getElementById('board-container');
-    if (container) container.innerHTML = '';
+  if (!user) {
+    const localWorkspace = readLocalWorkspace();
+    if (!localStorage.getItem(LS_BOARD)) saveLocalWorkspace();
+    applyLocalWorkspace(localWorkspace);
+    return;
   }
-});
+
+  const localWorkspace = readLocalWorkspace();
+  let cloudData;
+  try {
+    cloudData = await loadUserData(user.uid);
+  } catch (error) {
+    if (generation !== authLoadGeneration) return;
+    console.error('Cloud workspace unavailable; keeping the local workspace.', error);
+    applyLocalWorkspace(localWorkspace);
+    const status = document.getElementById('workspace-status');
+    if (status) {
+      status.textContent = 'Local workspace · sync unavailable';
+      status.classList.add('status-warning');
+    }
+    return;
+  }
+  if (generation !== authLoadGeneration) return;
+
+  let cloudBoard = null;
+  try {
+    cloudBoard = cloudData.board ? ensureBoardInvariant(cloudData.board, { strict: false }) : null;
+  } catch (error) {
+    console.error('Cloud workspace is invalid; ignoring it instead of overwriting local data.', error);
+  }
+  const cloudArchive = normalizeArchive(cloudData.archive);
+  const localHasData = hasMeaningfulLocalWorkspace(localWorkspace);
+  const previousChoice = getCloudChoice(user.uid);
+  const choiceIsCurrent = previousChoice?.choice === 'cloud'
+    && previousChoice.localRevision === getLocalRevision();
+  let choice = choiceIsCurrent ? 'cloud' : null;
+
+  if (localHasData && !choice) {
+    choice = await showWorkspaceChoice({
+      hasCloudWorkspace: Boolean(cloudBoard),
+      localCardCount: localWorkspace.board.cards.length + localWorkspace.archive.length
+    });
+    if (generation !== authLoadGeneration) return;
+  }
+
+  if (choice === 'local') {
+    await signOutUser();
+    return;
+  }
+
+  if (choice === 'import') {
+    if (cloudBoard && !confirm('Replace the existing synced workspace with this local workspace? This cannot be undone from GeneralManager.')) {
+      await signOutUser();
+      return;
+    }
+    board = ensureBoardInvariant(localWorkspace.board, { strict: false });
+    archive = normalizeArchive(localWorkspace.archive);
+    workspaceMode = 'cloud';
+    try {
+      await Promise.all([
+        saveUserBoardImmediate(user.uid, board),
+        saveUserArchiveImmediate(user.uid, archive)
+      ]);
+      rememberCloudChoice(user.uid, 'import');
+    } catch (error) {
+      console.error('Local-to-cloud import failed; keeping local data.', error);
+      applyLocalWorkspace(localWorkspace);
+      alert('Cloud import failed. Your local workspace was not deleted.');
+      return;
+    }
+  } else if (cloudBoard) {
+    board = cloudBoard;
+    archive = cloudArchive;
+    workspaceMode = 'cloud';
+    if (localHasData && !choiceIsCurrent) rememberCloudChoice(user.uid, 'cloud');
+  } else {
+    board = createDefaultBoard();
+    archive = [];
+    workspaceMode = 'cloud';
+    try {
+      await Promise.all([
+        saveUserBoardImmediate(user.uid, board),
+        saveUserArchiveImmediate(user.uid, archive)
+      ]);
+      if (localHasData) rememberCloudChoice(user.uid, 'cloud');
+    } catch (error) {
+      console.error('Could not create the cloud workspace; keeping local data.', error);
+      applyLocalWorkspace(localWorkspace);
+      alert('Cloud sync could not be started. Your local workspace is still available.');
+      return;
+    }
+  }
+
+  if (generation !== authLoadGeneration) return;
+  const emailEl = document.getElementById('user-email');
+  if (emailEl) {
+    emailEl.textContent = user.email || 'Signed in';
+    emailEl.title = user.email || 'Signed in';
+  }
+  initAppUI();
+}
+
+// Start immediately in local mode. Firebase auth may later offer an explicit
+// cloud-workspace switch, but it never blocks the first render.
+loadSettings();
+applyLocalWorkspace(readLocalWorkspace());
+onUserChanged(handleUserChanged);

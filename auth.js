@@ -1,43 +1,42 @@
 // auth.js
 
-// CSS styles for the auth modal
 const authStyles = `
-#auth-overlay {
+#auth-overlay,
+#workspace-choice-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(7, 7, 10, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(7, 9, 12, 0.82);
   z-index: 2000;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 200ms ease;
+  padding: 20px;
 }
-#auth-container {
-  background: rgba(18, 18, 28, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  width: 380px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(124, 58, 237, 0.15);
-  padding: 32px;
+#auth-container,
+#workspace-choice-container {
+  background: #171c22;
+  border: 1px solid #303944;
+  border-radius: 10px;
+  width: min(380px, 100%);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  padding: 28px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
 }
-.auth-header {
-  text-align: center;
-}
+.auth-header { text-align: center; }
 .auth-header h2 {
   font-size: 22px;
-  font-weight: 850;
+  font-weight: 750;
   letter-spacing: -0.02em;
   color: var(--text-primary);
   margin-bottom: 6px;
 }
-.auth-header p {
+.auth-header p,
+.workspace-choice-copy {
   color: var(--text-muted);
   font-size: 13px;
+  line-height: 1.5;
 }
 .auth-tabs {
   display: flex;
@@ -51,16 +50,16 @@ const authStyles = `
   font-weight: 600;
   color: var(--text-muted);
   border-bottom: 2px solid transparent;
-  transition: all var(--transition);
 }
 .auth-tab.active {
-  color: var(--accent-purple);
+  color: var(--text-primary);
   border-color: var(--accent-purple);
 }
-.auth-form {
+.auth-form,
+.workspace-choice-actions {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 .auth-field {
   display: flex;
@@ -69,7 +68,7 @@ const authStyles = `
 }
 .auth-field label {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted);
@@ -81,35 +80,31 @@ const authStyles = `
   padding: 10px 14px;
   color: var(--text-primary);
   font-size: 14px;
-  transition: border-color var(--transition);
 }
 .auth-field input:focus {
-  border-color: rgba(124, 58, 237, 0.65);
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 3px var(--accent-purple-dim);
 }
 .auth-btn {
-  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+  background: var(--accent-purple);
   color: #fff;
-  border-radius: 9px;
-  padding: 12px;
+  border-radius: 7px;
+  padding: 11px 12px;
   font-weight: 700;
   text-align: center;
   cursor: pointer;
-  transition: all var(--transition);
-  box-shadow: 0 0 18px rgba(124, 58, 237, 0.35);
   border: none;
-  margin-top: 8px;
+  margin-top: 4px;
 }
-.auth-btn:hover {
-  box-shadow: 0 0 28px rgba(124, 58, 237, 0.55);
-  transform: translateY(-1px);
+.auth-btn:hover { background: #6d32d0; }
+.auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.auth-secondary {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
 }
-.auth-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
+.auth-secondary:hover { color: var(--text-primary); }
 #auth-error {
   color: var(--priority-high);
   font-size: 12px;
@@ -120,56 +115,64 @@ const authStyles = `
   display: none;
   line-height: 1.4;
 }
+.workspace-choice-actions .btn { justify-content: center; }
+.workspace-choice-actions .btn-danger { color: var(--priority-high); }
 `;
 
-// Injects styling to document
 const styleEl = document.createElement('style');
 styleEl.textContent = authStyles;
 document.head.appendChild(styleEl);
 
-// State listeners callbacks
 const authStateCallbacks = [];
+let authStateKnown = false;
+let lastAuthUser = null;
+const authService = typeof auth !== 'undefined' && auth ? auth : null;
+const firebaseAuthAvailable = Boolean(authService);
 
-// Register callback to trigger on authentication state changes
 function onUserChanged(callback) {
   authStateCallbacks.push(callback);
-  // If user is already loaded/determined, fire callback immediately
-  if (auth.currentUser !== undefined && auth.currentUser !== null) {
-    callback(auth.currentUser);
+  if (authStateKnown) {
+    queueMicrotask(() => callback(lastAuthUser));
   }
 }
 
 function notifyAuthState(user) {
-  authStateCallbacks.forEach(cb => cb(user));
+  lastAuthUser = user;
+  authStateKnown = true;
+  authStateCallbacks.forEach(callback => callback(user));
 }
 
-// Shows the Authentication Modal
 function showAuthModal() {
+  if (!firebaseAuthAvailable) {
+    showSyncUnavailable();
+    return;
+  }
   if (document.getElementById('auth-overlay')) return;
 
   const overlay = document.createElement('div');
   overlay.id = 'auth-overlay';
   overlay.innerHTML = `
-    <div id="auth-container">
+    <div id="auth-container" role="dialog" aria-modal="true" aria-labelledby="auth-title">
       <div class="auth-header">
-        <h2>GeneralManager</h2>
-        <p>Sign in to sync your workspace</p>
+        <h2 id="auth-title">Sign in to sync</h2>
+        <p>Keep using GeneralManager locally, or sign in to sync this workspace across devices.</p>
       </div>
-      <div class="auth-tabs">
-        <div class="auth-tab active" id="tab-login">Login</div>
-        <div class="auth-tab" id="tab-signup">Sign Up</div>
+      <div class="auth-tabs" role="tablist" aria-label="Account action">
+        <div class="auth-tab active" id="tab-login" role="tab" tabindex="0">Login</div>
+        <div class="auth-tab" id="tab-signup" role="tab" tabindex="0">Sign Up</div>
       </div>
       <form class="auth-form" id="auth-form">
-        <div id="auth-error"></div>
+        <div id="auth-error" role="alert"></div>
         <div class="auth-field">
           <label for="auth-email">Email</label>
           <input type="email" id="auth-email" required placeholder="you@example.com" autocomplete="email">
         </div>
         <div class="auth-field">
           <label for="auth-password">Password</label>
-          <input type="password" id="auth-password" required placeholder="••••••••" autocomplete="current-password">
+          <input type="password" id="auth-password" required placeholder="At least 6 characters" autocomplete="current-password">
         </div>
         <button type="submit" class="auth-btn" id="auth-submit-btn">Login</button>
+        <button type="button" class="auth-secondary" id="auth-cancel-btn">Continue locally</button>
       </form>
     </div>
   `;
@@ -181,31 +184,28 @@ function showAuthModal() {
   const form = document.getElementById('auth-form');
   const errorEl = document.getElementById('auth-error');
   const headerP = overlay.querySelector('.auth-header p');
+  let mode = 'login';
 
-  let mode = 'login'; // 'login' or 'signup'
-
-  tabLogin.addEventListener('click', () => {
-    if (mode === 'login') return;
-    mode = 'login';
-    tabLogin.classList.add('active');
-    tabSignup.classList.remove('active');
-    submitBtn.textContent = 'Login';
-    headerP.textContent = 'Sign in to sync your workspace';
+  const setMode = (nextMode) => {
+    mode = nextMode;
+    tabLogin.classList.toggle('active', mode === 'login');
+    tabSignup.classList.toggle('active', mode === 'signup');
+    submitBtn.textContent = mode === 'login' ? 'Login' : 'Sign Up';
+    headerP.textContent = mode === 'login'
+      ? 'Keep using GeneralManager locally, or sign in to sync this workspace across devices.'
+      : 'Create an account only if you want cloud sync across devices.';
     errorEl.style.display = 'none';
+  };
+
+  tabLogin.addEventListener('click', () => setMode('login'));
+  tabSignup.addEventListener('click', () => setMode('signup'));
+  document.getElementById('auth-cancel-btn').addEventListener('click', hideAuthModal);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) hideAuthModal();
   });
 
-  tabSignup.addEventListener('click', () => {
-    if (mode === 'signup') return;
-    mode = 'signup';
-    tabSignup.classList.add('active');
-    tabLogin.classList.remove('active');
-    submitBtn.textContent = 'Sign Up';
-    headerP.textContent = 'Create an account to start syncing';
-    errorEl.style.display = 'none';
-  });
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
     errorEl.style.display = 'none';
     submitBtn.disabled = true;
     const email = document.getElementById('auth-email').value.trim();
@@ -214,15 +214,14 @@ function showAuthModal() {
     try {
       if (mode === 'login') {
         submitBtn.textContent = 'Signing in...';
-        await auth.signInWithEmailAndPassword(email, password);
+        await authService.signInWithEmailAndPassword(email, password);
       } else {
         submitBtn.textContent = 'Creating account...';
-        await auth.createUserWithEmailAndPassword(email, password);
+        await authService.createUserWithEmailAndPassword(email, password);
       }
-      // Successful login/signup will trigger onAuthStateChanged
-    } catch (err) {
-      console.error(err);
-      errorEl.textContent = getFriendlyErrorMessage(err);
+    } catch (error) {
+      console.error(error);
+      errorEl.textContent = getFriendlyErrorMessage(error);
       errorEl.style.display = 'block';
       submitBtn.disabled = false;
       submitBtn.textContent = mode === 'login' ? 'Login' : 'Sign Up';
@@ -233,6 +232,52 @@ function showAuthModal() {
 function hideAuthModal() {
   const overlay = document.getElementById('auth-overlay');
   if (overlay) overlay.remove();
+}
+
+function showSyncUnavailable() {
+  const status = document.getElementById('workspace-status');
+  if (status) {
+    status.textContent = 'Local workspace · sync unavailable';
+    status.classList.add('status-warning');
+  }
+}
+
+function showWorkspaceChoice({ hasCloudWorkspace, localCardCount }) {
+  return new Promise(resolve => {
+    const existing = document.getElementById('workspace-choice-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'workspace-choice-overlay';
+    const cloudCopy = hasCloudWorkspace
+      ? 'A synced workspace already exists for this account.'
+      : 'No synced workspace exists for this account yet.';
+    overlay.innerHTML = `
+      <div id="workspace-choice-container" role="dialog" aria-modal="true" aria-labelledby="workspace-choice-title">
+        <div class="auth-header">
+          <h2 id="workspace-choice-title">Choose a workspace</h2>
+          <p class="workspace-choice-copy">${localCardCount} local card${localCardCount === 1 ? '' : 's'} found. ${cloudCopy} Nothing is merged or deleted automatically.</p>
+        </div>
+        <div class="workspace-choice-actions">
+          <button class="btn btn-primary" data-choice="import">Import local workspace</button>
+          ${hasCloudWorkspace ? '<button class="btn btn-ghost" data-choice="cloud">Use synced workspace</button>' : '<button class="btn btn-ghost" data-choice="cloud">Start a new synced workspace</button>'}
+          <button class="btn btn-ghost btn-danger" data-choice="local">Keep using local mode</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const finish = (choice) => {
+      overlay.remove();
+      resolve(choice);
+    };
+    overlay.querySelectorAll('[data-choice]').forEach(button => {
+      button.addEventListener('click', () => finish(button.dataset.choice));
+    });
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) finish('local');
+    });
+  });
 }
 
 function getFriendlyErrorMessage(error) {
@@ -251,26 +296,25 @@ function getFriendlyErrorMessage(error) {
       return 'The password must be at least 6 characters long.';
     case 'auth/invalid-credential':
       return 'Invalid email or password.';
+    case 'auth/network-request-failed':
+      return 'Network error. You can keep working locally and try again later.';
     default:
       return error.message || 'An authentication error occurred.';
   }
 }
 
-// Set auth persistence to local storage
-auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
-  .catch((err) => console.error("Error setting persistence:", err));
+if (authService) {
+  authService.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+    .catch(error => console.error('Error setting auth persistence:', error));
 
-// Set up Auth state listener
-auth.onAuthStateChanged((user) => {
-  if (user) {
-    hideAuthModal();
+  authService.onAuthStateChanged(user => {
+    if (user) hideAuthModal();
     notifyAuthState(user);
-  } else {
-    showAuthModal();
-    notifyAuthState(null);
-  }
-});
+  });
+} else {
+  notifyAuthState(null);
+}
 
 function signOutUser() {
-  return auth.signOut();
+  return authService ? authService.signOut() : Promise.resolve();
 }
