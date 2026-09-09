@@ -1,80 +1,51 @@
-# FIREBASE_SETUP.md — GeneralManager
+# FIREBASE_SETUP.md — Optional GeneralManager sync
 
-## Firebase Services Used
+GeneralManager is usable without Firebase. Configure Firebase only when you want email/password accounts and per-user cloud sync.
 
-| Service | Purpose |
-|---|---|
-| Firebase Authentication | Email/password sign-up and login |
-| Cloud Firestore | Board data, archive — per-user, synced across devices |
+## Services used
 
----
+- Firebase Authentication: email/password sign-in and sign-up.
+- Cloud Firestore: per-user board and archive documents.
 
-## Step 1 — Create a Firebase Project
+There is no server-side AI proxy. AI requests are made directly from the browser to the user-selected OpenAI-compatible endpoint.
 
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Click **Add project**
-3. Name it (e.g. `general-manager-app`)
-4. Disable Google Analytics if not needed → **Create project**
+## 1. Create a Firebase project
 
----
+1. Open the [Firebase Console](https://console.firebase.google.com/).
+2. Create or select a project.
+3. Register a Web App (`</>`). Firebase web configuration values identify the client project; they are not server secrets.
 
-## Step 2 — Enable Authentication
+## 2. Enable Authentication
 
-1. In your project → **Build → Authentication**
-2. Click **Get started**
-3. Under **Sign-in method** → enable **Email/Password**
-4. Save
+1. Open **Build → Authentication**.
+2. Click **Get started**.
+3. Enable **Email/Password** under **Sign-in method**.
 
----
+## 3. Create Firestore
 
-## Step 3 — Create a Firestore Database
+1. Open **Build → Firestore Database**.
+2. Create the database in Production mode.
+3. Select the desired region.
 
-1. In your project → **Build → Firestore Database**
-2. Click **Create database**
-3. Choose **Production mode** (you'll add rules in Step 5)
-4. Choose your preferred region (e.g. `us-central1` or nearest to your users)
-5. Click **Enable**
+## 4. Configure the client
 
----
+Copy the web app's `firebaseConfig` values into `firebase-config.js`.
 
-## Step 4 — Register a Web App
+The app still loads in local mode when the Firebase SDK or client configuration is unavailable. A Firebase initialization error must not be used as evidence that local persistence is broken.
 
-1. Project home → click the **`</>`** (Web) icon → **Add app**
-2. Give it a nickname (e.g. `GeneralManager Web`)
-3. **Do NOT enable Firebase Hosting** (you're using Vercel)
-4. Copy the `firebaseConfig` object shown — it looks like:
+## 5. Publish the rules
 
-```js
-const firebaseConfig = {
-  apiKey:            "<YOUR_API_KEY>",
-  authDomain:        "<YOUR_PROJECT_ID>.firebaseapp.com",
-  projectId:         "<YOUR_PROJECT_ID>",
-  storageBucket:     "<YOUR_PROJECT_ID>.appspot.com",
-  messagingSenderId: "<YOUR_SENDER_ID>",
-  appId:             "<YOUR_APP_ID>"
-};
-```
+Use the rules in [`firestore.rules`](firestore.rules):
 
-5. Open `firebase-config.js` and paste these values into the `FIREBASE_CONFIG` object.
-
----
-
-## Step 5 — Firestore Security Rules
-
-In Firebase Console → **Firestore Database → Rules**, paste:
-
-```
+```text
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Each user can only read/write their own data
     match /users/{userId}/data/{document} {
       allow read, write: if request.auth != null
                          && request.auth.uid == userId;
     }
 
-    // Deny everything else
     match /{document=**} {
       allow read, write: if false;
     }
@@ -82,99 +53,48 @@ service cloud.firestore {
 }
 ```
 
-Click **Publish**.
+The resulting documents are:
 
----
-
-## Firestore Data Structure
-
-```
-users/
-  {userId}/
-    data/
-      board    → { columns: [], cards: [], meta: { boardTitle, lastType } }
-      archive  → { cards: [] }
+```text
+users/{uid}/data/board   → { columns: [], cards: [], meta: {} }
+users/{uid}/data/archive → { cards: [] }
 ```
 
-- One `board` document per user (mirrors the in-memory JS object exactly)
-- One `archive` document per user
-- Max practical size: ~200 cards × 500 bytes = ~100 KB (well under the 1 MB doc limit)
+## 6. Deploy to Vercel
 
----
-
-## Required Environment Variables
-
-The Firebase client config is **not secret** — it is safe in your source code. However, if you want to keep it out of version control:
-
-| Variable | Example value |
-|---|---|
-| (none required) | Paste directly in `firebase-config.js` |
-
-Alternatively, for a cleaner Vercel setup, inject via a `window.__firebaseConfig` script (see Vercel section below).
-
----
-
-## Step 6 — Vercel Deployment
-
-### 6a. Push to GitHub
-```bash
-git add .
-git commit -m "Add Firebase Auth + Firestore"
-git push
-```
-
-### 6b. Import to Vercel
-1. Go to [vercel.com](https://vercel.com) → **Add New Project**
-2. Import your GitHub repo
-3. **Framework Preset**: Other (it's a static site)
-4. Leave Build Command and Output Directory empty
-5. Click **Deploy**
-
-### 6c. Add Authorized Domain in Firebase Auth
-
-> [!IMPORTANT]
-> This step is required for login to work on your Vercel domain.
-
-1. Firebase Console → **Authentication → Settings → Authorized domains**
-2. Click **Add domain**
-3. Add your Vercel domain: e.g. `general-manager.vercel.app`
-4. If you have a custom domain: also add `yourdomain.com`
-
-### 6d. (Optional) Environment Variable Injection
-
-If you want to keep `firebase-config.js` clean of values, inject via `vercel.json`:
-
-Create a `public/_headers` or use a Vercel Edge Config. Simpler: just paste the config values directly in `firebase-config.js` — they are public client credentials.
-
----
-
-## Step 7 — Local Testing
-
-Open `index.html` directly in your browser (via a local HTTP server, not `file://` — Firebase SDK requires HTTP):
+This repository is a static site. Vercel does not need a build command or output directory.
 
 ```bash
-# Using Python (quickest, no install needed)
-python -m http.server 8080
-
-# Or using npx serve
-npx serve .
+git push origin feat/public-tool-polish
 ```
 
-Then visit `http://localhost:8080`
+Import the repository into Vercel with Framework Preset **Other**. `vercel.json` supplies the SPA rewrite and these response headers:
 
-> [!NOTE]
-> Add `localhost` to Firebase Auth → Authorized Domains (it may already be there by default).
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
 
----
+No CSP is included because the app intentionally loads Firebase CDN scripts and sends optional browser-side AI requests to a user-selected endpoint.
 
-## Manual Checklist
+## 7. Authorize the deployment domain
 
-- [ ] Firebase project created
-- [ ] Email/Password Authentication enabled
-- [ ] Firestore database created (Production mode)
-- [ ] Web App registered → config copied into `firebase-config.js`
-- [ ] Firestore Security Rules published
-- [ ] App deployed to Vercel
-- [ ] Vercel domain added to Firebase Auth → Authorized Domains
-- [ ] Tested: sign up, sign in, logout, data persists across reload
-- [ ] Tested: import banner works for localStorage migration
+In **Authentication → Settings → Authorized domains**, add the Vercel hostname and any custom hostname. `localhost` is usually already present; add it if Firebase rejects local sign-in.
+
+## 8. Verify the optional sync flow
+
+1. Open the app over HTTP, for example `http://localhost:8080`.
+2. Confirm the board opens without an account.
+3. Create a local card and reload; local data should remain.
+4. Click **Sign in to sync**.
+5. If local and cloud data both exist, confirm that the explicit workspace choice appears.
+6. Import only after reading the replacement confirmation when a cloud workspace already exists.
+7. Verify a signed-in edit persists after reload.
+8. Sign out and confirm that the device's local workspace is shown again.
+
+## Local server
+
+```bash
+python3 -m http.server 8080
+```
+
+Open <http://localhost:8080>. No Firebase configuration is required for local mode.

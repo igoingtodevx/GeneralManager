@@ -1,59 +1,42 @@
 # CHANGELOG.md — GeneralManager
 
-## [2.0.0] — 2026-06-22 — Firebase Migration
-
-### Added
-- **Firebase Authentication** — email/password sign-up and login
-  - Premium dark auth modal with login/signup tab switcher
-  - Persistent auth state (user stays signed in across page reloads)
-  - User email display + Sign Out button in top bar
-  - Friendly error messages for all common auth failures
-- **Cloud Firestore persistence** — board data syncs across all devices
-  - Per-user data isolation (`users/{uid}/data/board` + `users/{uid}/data/archive`)
-  - Optimistic writes (UI updates instantly; Firestore save is async + debounced 300ms)
-  - Real-time multi-tab/device sync via `onSnapshot` listener
-  - Visual save indicator in top bar (⟳ Saving… → ✓ Saved)
-- **One-time localStorage → Firestore import**
-  - Auto-detected on first sign-in if `gm_board` exists in localStorage
-  - Non-destructive banner UI (Import / Skip)
-  - Clears `gm_board` and `gm_archive` from localStorage after successful import
-  - `gm_settings` (AI API config) remains device-local by design
-- **New files**:
-  - `firebase-config.js` — Firebase app initialization
-  - `auth.js` — Auth modal + state listener
-  - `db.js` — Firestore read/write wrappers with debouncing + save indicator
-  - `app.js` — Application logic (extracted from `index.html`)
-  - `vercel.json` — Vercel SPA rewrite + security headers
-  - `.env.example` — Environment variable template
-  - `FIREBASE_SETUP.md` — Full setup guide with security rules + Vercel steps
-  - `MIGRATION_PLAN.md` — Architecture migration documentation
-  - `CHANGELOG.md` — This file
+## Unreleased — Public local-first tool polish
 
 ### Changed
-- `index.html` — `<script>` block replaced with Firebase CDN + 4 module `<script>` tags
-  - All HTML, CSS, and UI structure is **unchanged**
-  - Application initialisation is now async (waits for Firebase auth before loading data)
-- `saveBoard()` and `saveArchive()` now write to Firestore instead of localStorage
-- `loadBoard()` and `loadArchive()` now read from Firestore instead of localStorage
-- App startup blocks on auth state — unauthenticated users see the auth modal, not the board
 
-### Unchanged
-- All board, card, column, and archive UX is identical to v1.x
-- Drag-and-drop, context menus, modals, filters, search — all unchanged
-- AI panel (API key, model, prompts, streaming) — unchanged; API config stays in localStorage
-- Import/Export JSON (backup and restore) — unchanged
-- Keyboard shortcuts (`/`, `A`, `Escape`) — unchanged
-- CSS and visual design — unchanged
+- App startup is now **local-first**. A new visitor enters a local workspace immediately; Firebase Authentication is optional and no longer gates the board.
+- Board and archive persistence work in local mode through `gm_board` and `gm_archive` in browser `localStorage`.
+- Added **Sign in to sync** as an explicit optional cloud path. Existing per-user Firestore documents remain unchanged.
+- Added an explicit local/cloud workspace choice when both sides contain data. Importing into an existing cloud workspace requires confirmation; no automatic merge or destructive migration runs.
+- Signing out returns to the local workspace on the device.
+- Firebase initialization and cloud errors now fall back to local mode instead of preventing the app from opening.
+- Added a small-screen experience explaining that the full board is designed for desktop workspaces.
+- Added a short AI API-key notice. Provider, model, and API key remain device-local; API keys are not exported or written to Firestore.
+- Added HTTP(S) endpoint validation for browser-side AI requests and safer rendering for imported card URLs.
+- Added low-risk Vercel response headers: `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`.
+- Reduced decorative glow/gradient treatment in favor of a calmer workspace hierarchy while preserving the existing board structure.
 
-### Security
-- Firestore Security Rules ensure each user can only read/write their own data
-- Firebase client config (apiKey, projectId, etc.) is a public identifier — not a secret
-- AI API key stays in `localStorage` (never sent to Firestore)
+### Bug fixes
 
----
+- The last board column can no longer be deleted. The context menu explains why, and the guard also protects direct calls.
+- Quick Capture and archive restore ensure that a valid column exists before using a column fallback.
+- JSON import rejects missing or empty column arrays and validates imported board structure before replacing or merging.
+- Cloud/local board data is normalized so missing metadata and invalid references do not crash the renderer.
+
+### Documentation corrections
+
+- Removed the inaccurate `onSnapshot` real-time-sync claim. The current implementation performs a Firestore read on workspace load and debounced writes while editing.
+- Corrected the debounce description from 300 ms to the actual 800 ms used by `db.js`.
+- Corrected the Vercel security-header claim to match the headers now present in `vercel.json`.
+
+## [2.0.0] — 2026-06-22 — Firebase Migration
+
+- Added Firebase email/password Authentication and per-user Firestore persistence.
+- Moved the original single-file app into `app.js`, with `auth.js`, `db.js`, and `firebase-config.js` adapters.
+- Preserved browser-local AI settings and the original board/card/archive feature set.
 
 ## [1.x] — 2026-06-22 — Initial Release
 
-- Single-file (`index.html`) vanilla Kanban board
-- localStorage persistence for board, archive, AI settings
-- Firebase-free, works offline, deployable as a static file
+- Single-file vanilla Kanban board.
+- Browser-local persistence for board, archive, and AI settings.
+- Firebase-free, static-file deployment model.
