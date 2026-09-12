@@ -9,6 +9,7 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase using the Compat SDK
-const app = firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
+const demoMode = new URLSearchParams(location.search).get('demo') === '1';
+const app = demoMode ? null : firebase.initializeApp(firebaseConfig);
+const auth = demoMode ? null : firebase.auth();
+const db = demoMode ? null : firebase.firestore();

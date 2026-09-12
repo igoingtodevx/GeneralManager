@@ -1,5 +1,7 @@
 # MIGRATION_PLAN.md — GeneralManager localStorage → Firebase
 
+> Historical v2.0 plan, not the current implementation contract. Its onSnapshot, 300ms-write and import guarantees were not all implemented. Version 2.1 uses atomic revision-checked transactions, a local recovery journal and session-only AI keys. See RELEASE_REVIEW.md and the current code.
+
 ## Old localStorage Behavior
 
 | Key | Content | Written by |

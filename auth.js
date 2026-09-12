@@ -134,7 +134,7 @@ const authStateCallbacks = [];
 function onUserChanged(callback) {
   authStateCallbacks.push(callback);
   // If user is already loaded/determined, fire callback immediately
-  if (auth.currentUser !== undefined && auth.currentUser !== null) {
+  if (auth && auth.currentUser !== undefined && auth.currentUser !== null) {
     callback(auth.currentUser);
   }
 }
@@ -154,6 +154,8 @@ function showAuthModal() {
       <div class="auth-header">
         <h2>GeneralManager</h2>
         <p>Sign in to sync your workspace</p>
+        <a href="?demo=1">Try the interactive demo — no account needed</a>
+        <p>Cloud data uses Firebase. Pending edits are also kept in this browser for recovery. Avoid shared browser profiles.</p>
       </div>
       <div class="auth-tabs">
         <div class="auth-tab active" id="tab-login">Login</div>
@@ -257,11 +259,11 @@ function getFriendlyErrorMessage(error) {
 }
 
 // Set auth persistence to local storage
-auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+if (!demoMode) auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
   .catch((err) => console.error("Error setting persistence:", err));
 
 // Set up Auth state listener
-auth.onAuthStateChanged((user) => {
+if (!demoMode) auth.onAuthStateChanged((user) => {
   if (user) {
     hideAuthModal();
     notifyAuthState(user);

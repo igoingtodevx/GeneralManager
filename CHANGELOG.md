@@ -1,5 +1,15 @@
 # CHANGELOG.md — GeneralManager
 
+## [2.1.0-rc] — 2026-09-12 — Reliability and portfolio readiness
+
+- Atomic revision-checked writes and user-scoped pending-edit recovery.
+- Migration preserves original local data on failure; load errors never open a replacement default board.
+- Versioned and bounded JSON import validation; explicit merge/replace/cancel.
+- Session-only AI keys, HTTPS endpoint checks and context-transmission confirmation.
+- Account-free synthetic demo, responsive overrides and keyboard-openable cards.
+- 18 passing Node regression tests; browser script supplied but execution blocked in this environment.
+- See RELEASE_REVIEW.md for release gates. Historical 2.0 claims below (notably onSnapshot) are not evidence of current functionality.
+
 ## [2.0.0] — 2026-06-22 — Firebase Migration
 
 ### Added

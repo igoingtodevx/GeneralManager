@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GeneralManager — Context &amp; Task Manager</title>
 <meta name="description" content="Personal AI-assisted context and task manager for power users running multiple AI agents, research sessions, and workflows.">
+<link rel="stylesheet" href="responsive.css">
 <style>
 /* ═══════════════════════════════════════════════════════════
    DESIGN TOKENS
@@ -1181,6 +1182,7 @@ body {
 </style>
 </head>
 <body>
+<div id="demo-banner" hidden>Interactive demo · synthetic data · changes reset on reload. <a href="/">Sign in to save your own workspace →</a></div>
 <div id="app">
   <!-- TOP BAR: Board title + Quick Capture + AI toggle -->
   <div id="top-bar">
@@ -1228,6 +1230,7 @@ body {
     </div>
     <div class="toolbar-right">
       <button class="btn btn-ghost btn-sm" id="archive-view-btn" title="View archived cards">📦 Archive</button>
+      <button class="btn btn-ghost btn-sm" id="retry-save-btn">Retry save</button>
       <button class="btn btn-ghost btn-sm" id="export-btn" title="Export board as JSON">📥 Export</button>
       <button class="btn btn-ghost btn-sm" id="import-btn" title="Import board from JSON">📤 Import</button>
       <input type="file" id="import-file" accept=".json" style="display:none">
@@ -1251,6 +1254,7 @@ body {
         <!-- Config -->
         <div class="ai-section">
           <div class="ai-section-title">API Configuration</div>
+          <p class="privacy-note">Optional, bring your own key. The key stays in memory until reload or sign-out. AI actions send board context to your chosen provider after confirmation and may incur charges. Never enter sensitive data in a shared browser.</p>
           <div class="ai-field">
             <label>Base URL</label>
             <div class="ai-presets">
@@ -1330,7 +1334,7 @@ body {
 
 <!-- Detail Modal -->
 <div id="modal-overlay">
-  <div id="modal">
+  <div id="modal" role="dialog" aria-modal="true" aria-label="Edit card">
     <div class="modal-title-row">
       <input type="text" id="modal-title" placeholder="Card title" spellcheck="false">
       <button class="btn-icon" id="modal-close">✕</button>
@@ -1408,6 +1412,7 @@ body {
      ══════════════════════════════════════════════════════════ -->
 <script src="firebase-config.js"></script>
 <script src="auth.js"></script>
+<script src="domain.js"></script>
 <script src="db.js"></script>
 <script src="app.js"></script>
 </body>
