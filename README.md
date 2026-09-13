@@ -88,7 +88,7 @@ The repository has no runtime dependencies. Node 22 is used for the test suite.
 npm test
 ```
 
-CI also runs syntax checks and a real headless-Chrome smoke test. The browser test boots the classic auth/persistence scripts, the ES-module controller, and exercises the `Ctrl/Cmd + K` command-palette path through the Chrome DevTools Protocol.
+CI also runs syntax checks and a real headless-Chrome smoke test. The browser test boots the classic auth/persistence scripts and the ES-module controller, then exercises an actual Settings interaction through the Chrome DevTools Protocol without faking a Firebase account.
 
 ## Data and security boundaries
 
