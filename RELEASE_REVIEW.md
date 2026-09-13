@@ -22,8 +22,8 @@
 
 ## Not verified / release gates
 
-1. Run `tests/browser-smoke.cjs` in a normal browser-enabled environment. The local browser lacked an executable; installing OS dependencies was denied. The provided cloud browser also explicitly blocked local HTTP and shared-file URLs. No workaround was attempted after the explicit block.
-2. Complete visual review at desktop, 390px and 320px widths. Responsive CSS and focus handling are implemented but not browser-certified. No screenshots were generated.
+1. Complete one browser smoke against commit `5202aa6a7054babb05204761f51ac9e642fdcdc4`. Its Vercel deployment succeeded, but the ChatGPT Cloud Browser was redirected from the PR preview to Vercel Authentication, so the application itself was not reached. Use an intentionally public preview or an approved Vercel preview-auth handoff; do not count the deployment status as a product PASS.
+2. Complete visual review at desktop, 390px and 320px widths. Responsive CSS and focus handling are implemented but not browser-certified. No product screenshot was generated because the only permitted browser run stopped at Preview Authentication.
 3. Test actual Firebase authentication, transaction retries, offline recovery, two concurrently signed-in tabs and rules in the emulator. No real account, production data, API key or Firebase console was accessed.
 4. Review deployed Firestore rules. The existing owner-scoped rules are unchanged. Revision coordination is enforced by this application, not by a rule that prevents an old or custom client from writing without a revision.
 5. Close/reload older app tabs before rollout. Legacy clients do not participate in the new revision protocol.
@@ -43,4 +43,4 @@ npm run check
 node tests/browser-smoke.cjs
 ```
 
-The smoke script is supplied but was not executed successfully in this environment. It must not be counted as a passing test. Do not merge/release solely on the Node suite.
+The smoke script is supplied but was not executed successfully in this environment. The single Cloud Browser attempt on 2026-09-13 was blocked by Vercel Preview Authentication before app load. Neither attempt is a passing browser test. Do not merge/release solely on the Node suite or Vercel's deployment status.
