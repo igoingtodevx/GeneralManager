@@ -1,10 +1,8 @@
-export const TYPES = ['AGENT', 'RESEARCH', 'REPO', 'URL', 'NOTE', 'IDEA'];
-export const PRIORITIES = ['HIGH', 'MED', 'LOW'];
-export const DEFAULT_COLUMNS = ['INBOX', 'NOW', 'NEXT', 'WAITING', 'LATER', 'DONE'];
-
-export const TYPE_ICONS = {
-  AGENT: '🤖', RESEARCH: '🔬', REPO: '📦', URL: '🔗', NOTE: '📝', IDEA: '💡'
-};
+export const STATES = ['INBOX', 'NOW', 'QUEUE', 'WAITING', 'LATER', 'DONE'];
+export const KINDS = ['TASK', 'PROJECT', 'FOLLOWUP', 'IDEA', 'REFERENCE', 'ROUTINE'];
+export const PRIORITIES = ['HIGH', 'NORMAL', 'LOW'];
+export const EFFORTS = ['QUICK', 'MEDIUM', 'DEEP'];
+export const CAPACITY_SLOTS = { LIGHT: 1, NORMAL: 3, FULL: 5 };
 
 const DAY = 86_400_000;
 
@@ -13,186 +11,283 @@ export function makeId() {
   return `gm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function createDefaultBoard() {
-  const columns = DEFAULT_COLUMNS.map((name, order) => ({ id: makeId(), name, order }));
+export function createDefaultWorkspace(now = Date.now()) {
   return {
-    columns,
-    cards: [],
+    items: [],
     meta: {
-      version: 2,
-      boardTitle: 'GeneralManager',
-      lastType: 'NOTE',
-      lastDestinationName: 'INBOX',
-      preferredView: 'focus'
+      version: 3,
+      title: 'General Manager',
+      capacityMode: 'NORMAL',
+      preferredView: 'desk',
+      lastCaptureKind: 'TASK',
+      lastOpenedAt: now,
+      lastRegroupAt: 0
     }
   };
 }
 
-export function normalizeBoard(input) {
-  const board = input && typeof input === 'object' ? structuredClone(input) : createDefaultBoard();
-  board.columns = Array.isArray(board.columns) && board.columns.length ? board.columns : createDefaultBoard().columns;
-  board.columns = board.columns.map((col, index) => ({
-    id: col.id || makeId(),
-    name: String(col.name || `COLUMN ${index + 1}`).trim().toUpperCase(),
-    order: Number.isFinite(col.order) ? col.order : index,
-    color: col.color || undefined
-  })).sort((a, b) => a.order - b.order);
-  board.columns.forEach((col, index) => { col.order = index; });
-
-  board.cards = Array.isArray(board.cards) ? board.cards.map(normalizeCard) : [];
-  const validColumns = new Set(board.columns.map(col => col.id));
-  board.cards.forEach(card => {
-    if (!validColumns.has(card.columnId)) card.columnId = board.columns[0].id;
-  });
-
-  board.meta = { ...(board.meta || {}) };
-  board.meta.version = 2;
-  board.meta.boardTitle = board.meta.boardTitle || 'GeneralManager';
-  board.meta.lastType = TYPES.includes(board.meta.lastType) ? board.meta.lastType : 'NOTE';
-  board.meta.lastDestinationName = board.meta.lastDestinationName || preferredCaptureColumn(board)?.name || board.columns[0].name;
-  board.meta.preferredView = board.meta.preferredView === 'board' ? 'board' : 'focus';
-  return board;
+function mapLegacyKind(type) {
+  const value = String(type || '').toUpperCase();
+  if (value === 'IDEA') return 'IDEA';
+  if (value === 'URL') return 'REFERENCE';
+  if (value === 'REPO' || value === 'RESEARCH') return 'PROJECT';
+  return 'TASK';
 }
 
-export function normalizeCard(card = {}) {
-  const now = Date.now();
+function mapLegacyPriority(priority) {
+  const value = String(priority || '').toUpperCase();
+  if (value === 'HIGH') return 'HIGH';
+  if (value === 'LOW') return 'LOW';
+  return 'NORMAL';
+}
+
+function mapLegacyState(name) {
+  const value = String(name || '').toUpperCase();
+  if (['INBOX', 'BACKLOG'].includes(value)) return 'INBOX';
+  if (['NOW', 'ACTIVE'].includes(value)) return 'NOW';
+  if (value === 'WAITING') return 'WAITING';
+  if (['LATER', 'PARKED'].includes(value)) return 'LATER';
+  if (value === 'DONE') return 'DONE';
+  return 'QUEUE';
+}
+
+function migrateLegacyBoard(input, now = Date.now()) {
+  const columns = new Map((input?.columns || []).map(col => [col.id, col.name]));
+  const workspace = createDefaultWorkspace(now);
+  workspace.meta.title = input?.meta?.boardTitle || 'General Manager';
+  workspace.items = (input?.cards || []).map(card => normalizeItem({
+    id: card.id,
+    title: card.title,
+    nextAction: card.nextAction,
+    notes: card.notes,
+    waitingOn: card.blocker,
+    sourceUrl: card.url,
+    tool: card.aiModel,
+    kind: mapLegacyKind(card.type),
+    priority: mapLegacyPriority(card.priority),
+    state: mapLegacyState(columns.get(card.columnId)),
+    subtasks: card.subtasks,
+    createdAt: card.createdAt,
+    updatedAt: card.updatedAt,
+    completedAt: mapLegacyState(columns.get(card.columnId)) === 'DONE' ? card.updatedAt : null
+  }, now));
+  return workspace;
+}
+
+export function normalizeWorkspace(input, now = Date.now()) {
+  if (!input || typeof input !== 'object') return createDefaultWorkspace(now);
+  if (Array.isArray(input.cards) || Array.isArray(input.columns)) return migrateLegacyBoard(input, now);
+  const workspace = structuredClone(input);
+  workspace.items = Array.isArray(workspace.items) ? workspace.items.map(item => normalizeItem(item, now)) : [];
+  workspace.meta = { ...(workspace.meta || {}) };
+  workspace.meta.version = 3;
+  workspace.meta.title = workspace.meta.title || workspace.meta.boardTitle || 'General Manager';
+  workspace.meta.capacityMode = CAPACITY_SLOTS[workspace.meta.capacityMode] ? workspace.meta.capacityMode : 'NORMAL';
+  workspace.meta.preferredView = ['desk', 'inbox', 'everything', 'sources'].includes(workspace.meta.preferredView) ? workspace.meta.preferredView : 'desk';
+  workspace.meta.lastCaptureKind = KINDS.includes(workspace.meta.lastCaptureKind) ? workspace.meta.lastCaptureKind : 'TASK';
+  workspace.meta.lastOpenedAt = Number.isFinite(workspace.meta.lastOpenedAt) ? workspace.meta.lastOpenedAt : now;
+  workspace.meta.lastRegroupAt = Number.isFinite(workspace.meta.lastRegroupAt) ? workspace.meta.lastRegroupAt : 0;
+  return workspace;
+}
+
+export function normalizeItem(item = {}, now = Date.now()) {
+  const state = STATES.includes(String(item.state || '').toUpperCase()) ? String(item.state).toUpperCase() : 'INBOX';
+  const createdAt = Number.isFinite(item.createdAt) ? item.createdAt : now;
+  const updatedAt = Number.isFinite(item.updatedAt) ? item.updatedAt : createdAt;
   return {
-    ...card,
-    id: card.id || makeId(),
-    type: TYPES.includes(card.type) ? card.type : 'NOTE',
-    title: String(card.title || 'Untitled').trim(),
-    url: card.url || '',
-    notes: card.notes || '',
-    nextAction: card.nextAction || '',
-    blocker: card.blocker || '',
-    priority: PRIORITIES.includes(card.priority) ? card.priority : 'MED',
-    aiModel: card.aiModel || '',
-    subtasks: Array.isArray(card.subtasks) ? card.subtasks : [],
-    order: Number.isFinite(card.order) ? card.order : 0,
-    createdAt: Number.isFinite(card.createdAt) ? card.createdAt : now,
-    updatedAt: Number.isFinite(card.updatedAt) ? card.updatedAt : now
+    ...item,
+    id: item.id || makeId(),
+    title: String(item.title || 'Untitled').trim(),
+    nextAction: String(item.nextAction || '').trim(),
+    notes: String(item.notes || ''),
+    state,
+    kind: KINDS.includes(String(item.kind || '').toUpperCase()) ? String(item.kind).toUpperCase() : 'TASK',
+    priority: PRIORITIES.includes(String(item.priority || '').toUpperCase()) ? String(item.priority).toUpperCase() : 'NORMAL',
+    effort: EFFORTS.includes(String(item.effort || '').toUpperCase()) ? String(item.effort).toUpperCase() : 'MEDIUM',
+    area: String(item.area || '').trim(),
+    waitingOn: String(item.waitingOn || '').trim(),
+    sourceLabel: String(item.sourceLabel || '').trim(),
+    sourceUrl: String(item.sourceUrl || item.url || '').trim(),
+    tool: String(item.tool || '').trim(),
+    dueAt: item.dueAt || '',
+    snoozedUntil: item.snoozedUntil || '',
+    pinned: !!item.pinned,
+    subtasks: Array.isArray(item.subtasks) ? item.subtasks.map(step => ({
+      id: step.id || makeId(),
+      text: String(step.text || '').trim(),
+      done: !!step.done
+    })).filter(step => step.text) : [],
+    createdAt,
+    updatedAt,
+    completedAt: state === 'DONE' ? (Number.isFinite(item.completedAt) ? item.completedAt : updatedAt) : null
   };
 }
 
-export function preferredCaptureColumn(board) {
-  const columns = sortedColumns(board);
-  const remembered = columns.find(col => col.name === board?.meta?.lastDestinationName);
-  return remembered || columns.find(col => col.name === 'INBOX') || columns[0];
+export function captureItem(workspace, { title, kind = 'TASK', sourceUrl = '', sourceLabel = '', state = 'INBOX' } = {}, now = Date.now()) {
+  const item = normalizeItem({ title, kind, sourceUrl, sourceLabel, state, createdAt: now, updatedAt: now }, now);
+  workspace.items.push(item);
+  workspace.meta.lastCaptureKind = item.kind;
+  return item;
 }
 
-export function sortedColumns(board) {
-  return [...(board?.columns || [])].sort((a, b) => a.order - b.order);
+export function setItemState(workspace, itemId, state, now = Date.now()) {
+  const item = workspace.items.find(candidate => candidate.id === itemId);
+  if (!item || !STATES.includes(state)) return null;
+  item.state = state;
+  item.updatedAt = now;
+  item.completedAt = state === 'DONE' ? now : null;
+  if (state !== 'WAITING') item.waitingOn = item.waitingOn || '';
+  return item;
 }
 
-export function cardsForColumn(board, columnId) {
-  return (board?.cards || [])
-    .filter(card => card.columnId === columnId)
-    .sort((a, b) => a.order - b.order || b.updatedAt - a.updatedAt);
-}
-
-export function findColumnByName(board, name) {
-  const target = String(name || '').trim().toUpperCase();
-  return (board?.columns || []).find(col => col.name.toUpperCase() === target) || null;
-}
-
-export function createCard(board, { title, type = 'NOTE', columnId, url = '' }) {
-  const destination = board.columns.find(col => col.id === columnId) || preferredCaptureColumn(board);
-  const now = Date.now();
-  const card = normalizeCard({
+export function duplicateItem(workspace, itemId, now = Date.now()) {
+  const item = workspace.items.find(candidate => candidate.id === itemId);
+  if (!item) return null;
+  const copy = normalizeItem({
+    ...structuredClone(item),
     id: makeId(),
-    columnId: destination.id,
-    type,
-    title,
-    url,
-    order: cardsForColumn(board, destination.id).length,
+    title: `${item.title} (copy)`,
+    state: item.state === 'DONE' ? 'QUEUE' : item.state,
     createdAt: now,
-    updatedAt: now
-  });
-  board.cards.push(card);
-  board.meta.lastType = card.type;
-  board.meta.lastDestinationName = destination.name;
-  return card;
-}
-
-export function moveCard(board, cardId, columnId, targetIndex = null) {
-  const card = board.cards.find(item => item.id === cardId);
-  const column = board.columns.find(item => item.id === columnId);
-  if (!card || !column) return null;
-  card.columnId = column.id;
-  card.updatedAt = Date.now();
-  const siblings = cardsForColumn(board, column.id).filter(item => item.id !== card.id);
-  const index = targetIndex == null ? siblings.length : Math.max(0, Math.min(targetIndex, siblings.length));
-  siblings.splice(index, 0, card);
-  siblings.forEach((item, order) => { item.order = order; });
-  return card;
-}
-
-export function duplicateCard(board, cardId) {
-  const original = board.cards.find(card => card.id === cardId);
-  if (!original) return null;
-  const now = Date.now();
-  const copy = normalizeCard({
-    ...structuredClone(original),
-    id: makeId(),
-    title: `${original.title} (copy)`,
-    order: cardsForColumn(board, original.columnId).length,
-    createdAt: now,
-    updatedAt: now
-  });
-  board.cards.push(copy);
+    updatedAt: now,
+    completedAt: null
+  }, now);
+  workspace.items.push(copy);
   return copy;
 }
 
-export function archiveCard(board, archive, cardId) {
-  const index = board.cards.findIndex(card => card.id === cardId);
-  if (index < 0) return null;
-  const [card] = board.cards.splice(index, 1);
-  archive.push({ ...card, archivedAt: Date.now() });
-  return card;
+export function isAvailable(item, now = Date.now()) {
+  if (!item.snoozedUntil) return true;
+  const wake = Date.parse(item.snoozedUntil);
+  return !Number.isFinite(wake) || wake <= now;
 }
 
-export function cardMatches(card, { query = '', type = 'ALL', priority = 'ALL' } = {}) {
-  if (type !== 'ALL' && card.type !== type) return false;
-  if (priority !== 'ALL' && card.priority !== priority) return false;
-  const q = query.trim().toLowerCase();
+export function dueInfo(item, now = Date.now()) {
+  if (!item.dueAt) return { hasDue: false, overdue: false, ms: Infinity, days: Infinity };
+  const due = Date.parse(item.dueAt);
+  if (!Number.isFinite(due)) return { hasDue: false, overdue: false, ms: Infinity, days: Infinity };
+  const ms = due - now;
+  return { hasDue: true, overdue: ms < 0, ms, days: Math.ceil(ms / DAY), timestamp: due };
+}
+
+export function staleInfo(item, now = Date.now()) {
+  const ageMs = Math.max(0, now - (item.updatedAt || item.createdAt || now));
+  const days = Math.floor(ageMs / DAY);
+  return { ageMs, days, stale: days >= 3, veryStale: days >= 7 };
+}
+
+export function attentionScore(item, now = Date.now()) {
+  if (item.state === 'DONE' || item.state === 'LATER' || item.state === 'WAITING' || !isAvailable(item, now)) return -Infinity;
+  let score = 0;
+  if (item.state === 'NOW') score += 120;
+  if (item.state === 'QUEUE') score += 24;
+  if (item.pinned) score += 80;
+  if (item.priority === 'HIGH') score += 28;
+  if (item.priority === 'LOW') score -= 8;
+  const due = dueInfo(item, now);
+  if (due.hasDue) {
+    if (due.overdue) score += 85 + Math.min(25, Math.abs(due.days) * 3);
+    else if (due.ms <= DAY) score += 65;
+    else if (due.ms <= 3 * DAY) score += 42;
+    else if (due.ms <= 7 * DAY) score += 18;
+  }
+  const stale = staleInfo(item, now);
+  if (item.state === 'NOW' && stale.stale) score += 12;
+  return score;
+}
+
+export function deskItems(workspace, now = Date.now()) {
+  const limit = CAPACITY_SLOTS[workspace?.meta?.capacityMode] || 3;
+  return workspace.items
+    .filter(item => ['NOW', 'QUEUE'].includes(item.state) && isAvailable(item, now))
+    .sort((a, b) => attentionScore(b, now) - attentionScore(a, now) || b.updatedAt - a.updatedAt)
+    .slice(0, limit);
+}
+
+export function inboxItems(workspace, now = Date.now()) {
+  return workspace.items
+    .filter(item => item.state === 'INBOX' && isAvailable(item, now))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export function waitingItems(workspace) {
+  return workspace.items
+    .filter(item => item.state === 'WAITING')
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+}
+
+export function regroupCandidates(workspace, now = Date.now(), limit = 7) {
+  const candidates = workspace.items
+    .filter(item => item.state !== 'DONE' && isAvailable(item, now))
+    .map(item => {
+      const due = dueInfo(item, now);
+      const stale = staleInfo(item, now);
+      let reason = '';
+      let score = 0;
+      if (due.overdue) { reason = 'Date passed'; score += 100; }
+      else if (due.hasDue && due.ms <= DAY) { reason = 'Due soon'; score += 82; }
+      else if (item.state === 'NOW' && stale.stale) { reason = `In Now for ${stale.days}d`; score += 72; }
+      else if (item.state === 'WAITING' && stale.veryStale) { reason = `Waiting ${stale.days}d`; score += 58; }
+      else if (item.state === 'INBOX' && stale.days >= 2) { reason = `Unsorted for ${stale.days}d`; score += 52; }
+      else if (item.priority === 'HIGH' && item.state === 'QUEUE') { reason = 'High priority in queue'; score += 44; }
+      else if (stale.veryStale && ['QUEUE', 'INBOX'].includes(item.state)) { reason = `Untouched ${stale.days}d`; score += 34; }
+      if (item.pinned) score += 25;
+      return { item, reason, score };
+    })
+    .filter(entry => entry.reason)
+    .sort((a, b) => b.score - a.score || a.item.updatedAt - b.item.updatedAt)
+    .slice(0, limit);
+  return candidates;
+}
+
+function sourceName(item) {
+  if (item.sourceLabel) return item.sourceLabel;
+  if (item.tool) return item.tool;
+  if (item.sourceUrl) {
+    try { return new URL(item.sourceUrl).hostname.replace(/^www\./, ''); }
+    catch { return 'Link'; }
+  }
+  return '';
+}
+
+export function sourceGroups(workspace, now = Date.now()) {
+  const groups = new Map();
+  workspace.items.filter(item => item.state !== 'DONE').forEach(item => {
+    const name = sourceName(item);
+    if (!name) return;
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(item);
+  });
+  return [...groups.entries()].map(([name, items]) => ({
+    name,
+    count: items.length,
+    needsAttention: items.filter(item => attentionScore(item, now) >= 60).length,
+    newestAt: Math.max(...items.map(item => item.updatedAt || item.createdAt || 0)),
+    items: items.sort((a, b) => b.updatedAt - a.updatedAt)
+  })).sort((a, b) => b.needsAttention - a.needsAttention || b.newestAt - a.newestAt);
+}
+
+export function briefStats(workspace, now = Date.now()) {
+  const unresolved = workspace.items.filter(item => item.state !== 'DONE');
+  const doneToday = workspace.items.filter(item => item.state === 'DONE' && item.completedAt && now - item.completedAt < DAY).length;
+  return {
+    now: workspace.items.filter(item => item.state === 'NOW').length,
+    queue: workspace.items.filter(item => item.state === 'QUEUE').length,
+    inbox: workspace.items.filter(item => item.state === 'INBOX').length,
+    waiting: workspace.items.filter(item => item.state === 'WAITING').length,
+    later: workspace.items.filter(item => item.state === 'LATER').length,
+    unresolved: unresolved.length,
+    doneToday,
+    hiddenFromDesk: Math.max(0, unresolved.length - deskItems(workspace, now).length)
+  };
+}
+
+export function itemMatches(item, query = '') {
+  const q = String(query || '').trim().toLowerCase();
   if (!q) return true;
-  return [card.title, card.nextAction, card.notes, card.url, card.aiModel, card.blocker]
+  return [item.title, item.nextAction, item.notes, item.area, item.waitingOn, item.sourceLabel, item.sourceUrl, item.tool, item.kind, item.state]
     .filter(Boolean)
     .some(value => String(value).toLowerCase().includes(q));
-}
-
-export function staleInfo(card, now = Date.now()) {
-  const age = Math.max(0, now - (card.updatedAt || card.createdAt || now));
-  const days = Math.floor(age / DAY);
-  return { ageMs: age, days, stale: days >= 3, veryStale: days >= 7 };
-}
-
-export function focusColumns(board) {
-  const columns = sortedColumns(board);
-  const preferred = ['NOW', 'NEXT', 'WAITING'];
-  const exact = preferred.map(name => findColumnByName(board, name)).filter(Boolean);
-  if (exact.length) return exact;
-  return columns.slice(0, Math.min(3, columns.length));
-}
-
-export function isLegacyDefaultBoard(board) {
-  const names = sortedColumns(board).map(col => col.name.toUpperCase());
-  return names.length === 4 && names.join('|') === 'BACKLOG|ACTIVE|PARKED|DONE';
-}
-
-export function upgradeLegacyDefaultBoard(board) {
-  if (!isLegacyDefaultBoard(board)) return board;
-  const [backlog, active, parked, done] = sortedColumns(board);
-  backlog.name = 'INBOX';
-  active.name = 'NOW';
-  parked.name = 'LATER';
-  const next = { id: makeId(), name: 'NEXT', order: 2 };
-  const waiting = { id: makeId(), name: 'WAITING', order: 3 };
-  board.columns = [backlog, active, next, waiting, parked, done];
-  board.columns.forEach((col, index) => { col.order = index; });
-  board.meta.lastDestinationName = 'INBOX';
-  board.meta.preferredView = 'focus';
-  return board;
 }
 
 export function relativeTime(timestamp, now = Date.now()) {
@@ -208,18 +303,20 @@ export function relativeTime(timestamp, now = Date.now()) {
   return `${months}mo ago`;
 }
 
-export function cardToHandoff(card, columnName = '') {
+export function itemToHandoff(item) {
   const lines = [
-    `# ${card.title}`,
-    columnName ? `State: ${columnName}` : '',
-    `Type: ${card.type}`,
-    card.priority ? `Priority: ${card.priority}` : '',
-    card.nextAction ? `Next action: ${card.nextAction}` : '',
-    card.blocker ? `Blocker / waiting on: ${card.blocker}` : '',
-    card.url ? `URL: ${card.url}` : '',
-    card.aiModel ? `Model / tool: ${card.aiModel}` : '',
-    card.notes ? `\nContext:\n${card.notes}` : '',
-    card.subtasks?.length ? `\nChecklist:\n${card.subtasks.map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`).join('\n')}` : ''
+    `# ${item.title}`,
+    `State: ${item.state}`,
+    `Kind: ${item.kind}`,
+    item.area ? `Area: ${item.area}` : '',
+    item.nextAction ? `Next action: ${item.nextAction}` : '',
+    item.waitingOn ? `Waiting on: ${item.waitingOn}` : '',
+    item.dueAt ? `Due: ${item.dueAt}` : '',
+    item.sourceLabel ? `Source: ${item.sourceLabel}` : '',
+    item.sourceUrl ? `Source URL: ${item.sourceUrl}` : '',
+    item.tool ? `Tool / system: ${item.tool}` : '',
+    item.notes ? `\nContext:\n${item.notes}` : '',
+    item.subtasks?.length ? `\nSteps:\n${item.subtasks.map(step => `- [${step.done ? 'x' : ' '}] ${step.text}`).join('\n')}` : ''
   ];
   return lines.filter(Boolean).join('\n');
 }
