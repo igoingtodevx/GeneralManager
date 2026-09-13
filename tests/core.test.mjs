@@ -1,72 +1,99 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createDefaultBoard,
-  normalizeBoard,
-  createCard,
-  moveCard,
-  duplicateCard,
-  isLegacyDefaultBoard,
-  upgradeLegacyDefaultBoard,
-  staleInfo,
-  cardToHandoff
+  createDefaultWorkspace,
+  normalizeWorkspace,
+  captureItem,
+  setItemState,
+  deskItems,
+  regroupCandidates,
+  sourceGroups,
+  briefStats,
+  itemToHandoff
 } from '../core.js';
 
-test('fresh board uses resume-first workflow states', () => {
-  const board = createDefaultBoard();
-  assert.deepEqual(board.columns.map(c => c.name), ['INBOX', 'NOW', 'NEXT', 'WAITING', 'LATER', 'DONE']);
-  assert.equal(board.meta.lastDestinationName, 'INBOX');
-  assert.equal(board.meta.preferredView, 'focus');
+const DAY = 86_400_000;
+
+test('fresh workspace starts calm and finite', () => {
+  const workspace = createDefaultWorkspace(1000);
+  assert.equal(workspace.meta.version, 3);
+  assert.equal(workspace.meta.capacityMode, 'NORMAL');
+  assert.equal(workspace.meta.preferredView, 'desk');
+  assert.deepEqual(workspace.items, []);
 });
 
-test('normalization preserves custom columns and adds vNext card fields', () => {
-  const board = normalizeBoard({
-    columns: [{ id: 'x', name: 'custom', order: 0 }],
-    cards: [{ id: 'c', columnId: 'x', title: 'Hello', type: 'NOTE', priority: 'MED', createdAt: 1, updatedAt: 2 }],
-    meta: {}
-  });
-  assert.equal(board.columns[0].name, 'CUSTOM');
-  assert.equal(board.cards[0].nextAction, '');
-  assert.equal(board.meta.version, 2);
+test('legacy board migrates into universal items without losing context', () => {
+  const workspace = normalizeWorkspace({
+    columns: [
+      { id: 'a', name: 'ACTIVE', order: 0 },
+      { id: 'b', name: 'PARKED', order: 1 }
+    ],
+    cards: [{
+      id: 'c', columnId: 'a', title: 'Ship client thing', type: 'REPO', priority: 'HIGH',
+      nextAction: 'Run final check', notes: 'Keep this context', url: 'https://example.com',
+      createdAt: 1, updatedAt: 2, subtasks: []
+    }],
+    meta: { boardTitle: 'Old GM' }
+  }, 100);
+  assert.equal(workspace.meta.title, 'Old GM');
+  assert.equal(workspace.items[0].state, 'NOW');
+  assert.equal(workspace.items[0].kind, 'PROJECT');
+  assert.equal(workspace.items[0].nextAction, 'Run final check');
+  assert.equal(workspace.items[0].sourceUrl, 'https://example.com');
 });
 
-test('capture remembers destination and movement keeps ordering coherent', () => {
-  const board = createDefaultBoard();
-  const now = board.columns.find(c => c.name === 'NOW');
-  const card = createCard(board, { title: 'Ship it', columnId: now.id, type: 'AGENT' });
-  assert.equal(board.meta.lastDestinationName, 'NOW');
-  const next = board.columns.find(c => c.name === 'NEXT');
-  moveCard(board, card.id, next.id);
-  assert.equal(card.columnId, next.id);
-  assert.equal(card.order, 0);
+test('capture is frictionless and triage is explicit', () => {
+  const workspace = createDefaultWorkspace(1000);
+  const item = captureItem(workspace, { title: 'Call landlord', kind: 'FOLLOWUP' }, 2000);
+  assert.equal(item.state, 'INBOX');
+  assert.equal(workspace.meta.lastCaptureKind, 'FOLLOWUP');
+  setItemState(workspace, item.id, 'NOW', 3000);
+  assert.equal(item.state, 'NOW');
+  assert.equal(item.updatedAt, 3000);
 });
 
-test('duplicate makes an independent card', () => {
-  const board = createDefaultBoard();
-  const card = createCard(board, { title: 'Research', type: 'RESEARCH' });
-  card.subtasks = [{ id: 's1', text: 'Read', done: false }];
-  const copy = duplicateCard(board, card.id);
-  copy.subtasks[0].done = true;
-  assert.notEqual(copy.id, card.id);
-  assert.equal(card.subtasks[0].done, false);
+test('desk capacity is a hard attention budget, not a backlog view', () => {
+  const workspace = createDefaultWorkspace(0);
+  workspace.meta.capacityMode = 'LIGHT';
+  captureItem(workspace, { title: 'A', state: 'QUEUE' }, 10);
+  captureItem(workspace, { title: 'B', state: 'NOW' }, 20);
+  captureItem(workspace, { title: 'C', state: 'QUEUE' }, 30);
+  const desk = deskItems(workspace, 40);
+  assert.equal(desk.length, 1);
+  assert.equal(desk[0].title, 'B');
 });
 
-test('legacy default board upgrades only when exact legacy shape matches', () => {
-  const board = normalizeBoard({
-    columns: ['BACKLOG', 'ACTIVE', 'PARKED', 'DONE'].map((name, order) => ({ id: name, name, order })),
-    cards: [],
-    meta: {}
-  });
-  assert.equal(isLegacyDefaultBoard(board), true);
-  upgradeLegacyDefaultBoard(board);
-  assert.deepEqual(board.columns.map(c => c.name), ['INBOX', 'NOW', 'NEXT', 'WAITING', 'LATER', 'DONE']);
+test('regroup surfaces only meaningful re-entry decisions', () => {
+  const now = 20 * DAY;
+  const workspace = createDefaultWorkspace(now);
+  const staleNow = captureItem(workspace, { title: 'Stale active', state: 'NOW' }, now - 8 * DAY);
+  staleNow.updatedAt = now - 8 * DAY;
+  const freshQueue = captureItem(workspace, { title: 'Fresh queue', state: 'QUEUE' }, now - 1_000);
+  const oldWaiting = captureItem(workspace, { title: 'Old wait', state: 'WAITING' }, now - 10 * DAY);
+  oldWaiting.updatedAt = now - 10 * DAY;
+  const entries = regroupCandidates(workspace, now);
+  assert.deepEqual(entries.map(entry => entry.item.title), ['Stale active', 'Old wait']);
+  assert.equal(entries.some(entry => entry.item.id === freshQueue.id), false);
 });
 
-test('stale signals and local handoff are deterministic', () => {
-  const now = 10 * 86_400_000;
-  const info = staleInfo({ updatedAt: now - 8 * 86_400_000 }, now);
-  assert.equal(info.veryStale, true);
-  const text = cardToHandoff({ title: 'GM', type: 'AGENT', priority: 'HIGH', nextAction: 'Test it', notes: 'Context', subtasks: [] }, 'NOW');
-  assert.match(text, /Next action: Test it/);
-  assert.match(text, /State: NOW/);
+test('source groups batch systems below the attention layer', () => {
+  const workspace = createDefaultWorkspace(0);
+  captureItem(workspace, { title: 'Run 1', state: 'QUEUE', sourceLabel: 'Hermes' }, 10);
+  captureItem(workspace, { title: 'Run 2', state: 'QUEUE', sourceLabel: 'Hermes' }, 20);
+  captureItem(workspace, { title: 'Mail', state: 'WAITING', sourceLabel: 'Gmail' }, 30);
+  const groups = sourceGroups(workspace, 40);
+  assert.equal(groups.find(group => group.name === 'Hermes').count, 2);
+  assert.equal(groups.find(group => group.name === 'Gmail').count, 1);
+});
+
+test('brief and handoff remain deterministic without AI', () => {
+  const workspace = createDefaultWorkspace(0);
+  const item = captureItem(workspace, { title: 'General Manager', state: 'NOW' }, 100);
+  item.nextAction = 'Test re-entry';
+  item.area = 'Product';
+  const stats = briefStats(workspace, 200);
+  assert.equal(stats.now, 1);
+  const text = itemToHandoff(item);
+  assert.match(text, /Next action: Test re-entry/);
+  assert.match(text, /Area: Product/);
 });
