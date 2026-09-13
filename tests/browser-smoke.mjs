@@ -89,29 +89,27 @@ if (!ready) {
   throw new Error('Application scripts did not reach a ready persistence/auth boundary');
 }
 
-await evaluate(`
-  document.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true
-  }));
-`);
+// Settings is deliberately usable before a workspace has loaded. Clicking it
+// proves the vNext module reached wireStaticListeners without faking Firebase auth.
+await evaluate(`document.getElementById('settings-btn').click()`);
 await sleep(100);
 
-const commandOpened = await evaluate(`
-  !document.getElementById('command-overlay').classList.contains('hidden')
+const settingsOpened = await evaluate(`
+  !document.getElementById('settings-overlay').classList.contains('hidden')
 `);
 
-if (!commandOpened) {
-  throw new Error('vNext controller did not respond to Ctrl+K');
+if (!settingsOpened) {
+  throw new Error('vNext controller did not wire the Settings action');
 }
 
 const shellState = await evaluate(`({
-  focusVisible: !document.getElementById('focus-view').classList.contains('hidden'),
   capturePresent: !!document.getElementById('quick-destination'),
   inspectorPresent: !!document.getElementById('inspector'),
+  settingsOpen: !document.getElementById('settings-overlay').classList.contains('hidden'),
   title: document.title
 })`);
 
-if (!shellState.capturePresent || !shellState.inspectorPresent || shellState.title !== 'GeneralManager') {
+if (!shellState.capturePresent || !shellState.inspectorPresent || !shellState.settingsOpen || shellState.title !== 'GeneralManager') {
   throw new Error(`Unexpected shell state: ${JSON.stringify(shellState)}`);
 }
 
