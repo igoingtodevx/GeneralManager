@@ -5,7 +5,7 @@ function sleep(ms) {
 }
 
 async function getPage() {
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < 180; i += 1) {
     try {
       const pages = await fetch(`${endpoint}/json`).then(res => res.json());
       const page = pages.find(item => item.type === 'page');
@@ -73,7 +73,7 @@ await cdp('Page.enable');
 await cdp('Page.navigate', { url: 'http://127.0.0.1:8080/' });
 
 let ready = false;
-for (let i = 0; i < 80; i += 1) {
+for (let i = 0; i < 100; i += 1) {
   ready = await evaluate(`
     document.readyState === 'complete' &&
     !!document.getElementById('quick-input') &&
