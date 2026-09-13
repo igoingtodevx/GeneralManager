@@ -38,48 +38,33 @@ let listenersInitialized = false;
 // PERSISTENCE (Firestore adaptors)
 // ═══════════════════════════════════════════════════════════
 function saveBoard() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoard(currentUser.uid, board);
-    }
+  if (!board) return;
+  board.meta.boardTitle = document.getElementById('board-title').value.trim() || 'GeneralManager';
+  if (demoMode) { showSaveIndicator('saved', 'Demo · changes reset on reload'); return; }
+  if (currentUser) {
+    try { queueWorkspace(currentUser.uid, board, archive); }
+    catch (err) { showSaveIndicator('error', err.message + ' Export a backup now.'); }
   }
 }
-
 function saveBoardImmediate() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoardImmediate(currentUser.uid, board);
-    }
-  }
+  saveBoard();
+  if (currentUser) return flushWorkspace(currentUser.uid).catch(() => {});
 }
-
 function loadSettings() {
-  try {
-    const raw = localStorage.getItem(LS_SETTINGS);
-    if (raw) { settings = JSON.parse(raw); return; }
-  } catch (e) { /* reset */ }
   settings = { baseUrl: '', apiKey: '', model: '' };
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}');
+    settings = { baseUrl: raw.baseUrl || '', model: raw.model || '', apiKey: '' };
+    // Legacy stored secrets are not retained. Keys now live in memory for this session.
+    localStorage.setItem(LS_SETTINGS, JSON.stringify({ baseUrl: settings.baseUrl, model: settings.model }));
+  } catch { /* defaults remain usable */ }
 }
-
 function saveSettings() {
-  settings.baseUrl = document.getElementById('ai-base-url').value;
-  settings.apiKey = document.getElementById('ai-api-key').value;
-  settings.model = document.getElementById('ai-model').value;
-  localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
-}
-
-function saveArchive() {
-  if (currentUser) {
-    saveUserArchive(currentUser.uid, archive);
-  }
-}
-
-function saveArchiveImmediate() {
-  if (currentUser) {
-    saveUserArchiveImmediate(currentUser.uid, archive);
-  }
+  settings.baseUrl = document.getElementById('ai-base-url').value.trim().replace(/\/+$/, '');
+  settings.apiKey = document.getElementById('ai-api-key').value.trim();
+  settings.model = document.getElementById('ai-model').value.trim();
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify({ baseUrl: settings.baseUrl, model: settings.model })); }
+  catch { /* Session-only operation remains available. */ }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -231,6 +216,11 @@ function renderBoard() {
 
     header.appendChild(nameEl);
     header.appendChild(countEl);
+    const options = document.createElement('button');
+    options.type = 'button'; options.className = 'btn-icon column-options'; options.textContent = '⋯';
+    options.setAttribute('aria-label', 'Options for ' + col.name);
+    options.onclick = e => { e.stopPropagation(); const rect = options.getBoundingClientRect(); showColumnContextMenu({ clientX: rect.left, clientY: rect.bottom }, col.id); };
+    header.appendChild(options);
     colEl.appendChild(header);
 
     // Body
@@ -358,6 +348,10 @@ function renderCard(card) {
   el.dataset.cardId = card.id;
   el.dataset.type = card.type;
   el.draggable = true;
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  el.setAttribute('aria-label', 'Edit ' + card.title);
+  el.addEventListener('keydown', e => { if (e.target === el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openModal(card.id); } });
 
   // Drag
   el.addEventListener('dragstart', (e) => {
@@ -446,10 +440,10 @@ function renderCard(card) {
   el.appendChild(meta);
 
   // URL
-  if (card.url) {
+  if (GM.safeUrl(card.url)) {
     const urlLink = document.createElement('a');
     urlLink.className = 'card-url';
-    urlLink.href = card.url;
+    urlLink.href = GM.safeUrl(card.url);
     urlLink.target = '_blank';
     urlLink.rel = 'noopener';
     urlLink.textContent = card.url;
@@ -518,7 +512,6 @@ function archiveCard(cardId) {
   if (idx === -1) return;
   const card = board.cards.splice(idx, 1)[0];
   archive.push(card);
-  saveArchive();
   saveBoard();
   renderBoard();
 }
@@ -529,7 +522,7 @@ function duplicateCard(cardId) {
   const now = Date.now();
   const colCards = getCardsForColumn(orig.columnId);
   const copy = {
-    ...orig,
+    ...structuredClone(orig),
     id: crypto.randomUUID(),
     title: orig.title + ' (copy)',
     order: colCards.length,
@@ -643,6 +636,7 @@ function openModal(cardId) {
   document.getElementById('modal-updated').textContent = 'Modified: ' + relativeTime(card.updatedAt);
 
   document.getElementById('modal-overlay').classList.add('visible');
+  document.getElementById('modal-title').focus();
 }
 
 function closeModal() {
@@ -655,6 +649,8 @@ function saveModal() {
   const card = board.cards.find(c => c.id === activeModalCardId);
   if (!card) return;
 
+  const inputUrl = document.getElementById('modal-url').value.trim();
+  if (inputUrl && !GM.safeUrl(inputUrl)) { alert('Use a complete HTTP or HTTPS URL.'); return; }
   card.title = document.getElementById('modal-title').value.trim() || card.title;
   card.type = document.getElementById('modal-type').value;
   card.priority = document.getElementById('modal-priority').value;
@@ -820,6 +816,7 @@ function deleteColumn(colId) {
   const col = board.columns.find(c => c.id === colId);
   if (!col) return;
   
+  if (board.columns.length <= 1) { alert('Keep at least one column.'); return; }
   const colCards = getCardsForColumn(colId);
   if (colCards.length > 0) {
     const confirmMsg = `The column "${col.name}" contains ${colCards.length} card(s).\n\nAre you sure you want to delete this column and all its cards?`;
@@ -907,7 +904,7 @@ function renderArchiveList() {
     deleteBtn.addEventListener('click', () => {
       if (confirm(`Permanently delete "${card.title}"? This cannot be undone.`)) {
         archive = archive.filter(c => c.id !== card.id);
-        saveArchive();
+        saveBoard();
         renderArchiveList();
       }
     });
@@ -937,7 +934,6 @@ function restoreCard(cardId) {
   
   board.cards.push(card);
   saveBoard();
-  saveArchive();
   renderBoard();
   renderArchiveList();
 }
@@ -1005,6 +1001,7 @@ function initToolbar() {
 
 function exportBoard() {
   const data = {
+    schemaVersion: 1,
     board: board,
     settings: { baseUrl: settings.baseUrl, model: settings.model },
     archive: archive,
@@ -1018,62 +1015,26 @@ function exportBoard() {
   URL.revokeObjectURL(a.href);
 }
 
-function importBoard(e) {
-  const file = e.target.files[0];
+async function importBoard(e) {
+  const file = e.target.files[0]; e.target.value = '';
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(ev) {
-    try {
-      const data = JSON.parse(ev.target.result);
-      if (!data.board || !data.board.columns || !data.board.cards) {
-        alert('Invalid GeneralManager backup file.');
-        return;
-      }
-      const mode = confirm('Click OK to REPLACE your board, or Cancel to MERGE with existing data.');
-      if (mode) {
-        // Replace
-        board = data.board;
-        if (data.archive) archive = data.archive;
-      } else {
-        // Merge
-        const existingColNames = new Set(board.columns.map(c => c.name));
-        for (const col of data.board.columns) {
-          if (!existingColNames.has(col.name)) {
-            col.order = board.columns.length;
-            board.columns.push(col);
-            existingColNames.add(col.name);
-          }
-        }
-        const existingCardIds = new Set(board.cards.map(c => c.id));
-        for (const card of data.board.cards) {
-          if (!existingCardIds.has(card.id)) {
-            // Map to existing column by name
-            const srcCol = data.board.columns.find(c => c.id === card.columnId);
-            if (srcCol) {
-              const destCol = board.columns.find(c => c.name === srcCol.name);
-              if (destCol) card.columnId = destCol.id;
-              else card.columnId = board.columns[0].id;
-            }
-            board.cards.push(card);
-          }
-        }
-        if (data.archive) {
-          const existingArchiveIds = new Set(archive.map(c => c.id));
-          for (const ac of data.archive) {
-            if (!existingArchiveIds.has(ac.id)) archive.push(ac);
-          }
-        }
-      }
-      saveBoardImmediate();
-      saveArchiveImmediate();
-      renderBoard();
-      document.getElementById('board-title').value = board.meta.boardTitle;
-    } catch (err) {
-      alert('Failed to parse JSON: ' + err.message);
+  try {
+    if (file.size > GM.MAX_BYTES) throw new Error('Backup exceeds the 700 KB safety limit.');
+    const incoming = GM.validateWorkspace(JSON.parse(await file.text()));
+    const mode = prompt('Import mode: type MERGE or REPLACE. Cancel to leave your workspace unchanged.', 'MERGE');
+    if (mode === null) return;
+    if (!['MERGE', 'REPLACE'].includes(mode.trim().toUpperCase())) throw new Error('Choose MERGE or REPLACE.');
+    const next = mode.trim().toUpperCase() === 'REPLACE' ? incoming : GM.mergeWorkspaces({ board, archive }, incoming);
+    // Show the selected workspace while it is being saved, so retry/export refer
+    // to the same data as the pending journal if the cloud write fails.
+    board = next.board; archive = next.archive;
+    document.getElementById('board-title').value = board.meta.boardTitle;
+    renderBoard();
+    if (!demoMode) {
+      queueWorkspace(currentUser.uid, next.board, next.archive);
+      await flushWorkspace(currentUser.uid);
     }
-  };
-  reader.readAsText(file);
-  e.target.value = '';
+  } catch (err) { alert('Import could not be fully completed or synced. Check the save status and export a backup before leaving: ' + err.message); }
 }
 
 function clearDone() {
@@ -1088,7 +1049,6 @@ function clearDone() {
     board.cards = board.cards.filter(c => c.columnId !== col.id);
   }
   if (moved > 0) {
-    saveArchiveImmediate();
     saveBoardImmediate();
     renderBoard();
   }
@@ -1148,7 +1108,7 @@ function toggleAIPanel() {
 }
 
 function getBoardContext() {
-  const cols = board.columns.sort((a, b) => a.order - b.order);
+  const cols = [...board.columns].sort((a, b) => a.order - b.order);
   const context = cols.map(col => ({
     column: col.name,
     cards: getCardsForColumn(col.id).map(c => ({
@@ -1157,7 +1117,9 @@ function getBoardContext() {
       priority: c.priority,
       url: c.url || undefined,
       notes: c.notes ? c.notes.substring(0, 100) : undefined,
-      aiModel: c.aiModel || undefined
+      aiModel: c.aiModel || undefined,
+      updatedAt: new Date(c.updatedAt).toISOString(),
+      checklist: c.subtasks || []
     }))
   }));
   return JSON.stringify(context, null, 2);
@@ -1167,9 +1129,16 @@ const AI_PROMPTS = {
   summarize: 'Summarize what this person is working on across all columns in 3-5 sentences.',
   priority: 'Based on ACTIVE and BACKLOG cards, return the top 3 to focus on next. For each: card title + one sentence reason. Be direct.',
   stalled: 'Identify ACTIVE cards with no notes and no URL. These are likely stalled. List them and suggest one unblocking action each.',
-  standup: 'Generate a standup: Yesterday (DONE cards), Today (ACTIVE), Blockers (PARKED). One tight paragraph.'
+  standup: 'Generate a standup: Completed (DONE cards; do not infer a completion date), Today (ACTIVE), Blockers (PARKED). One tight paragraph.'
 };
 
+let aiRequestController = null;
+function validatedAIEndpoint() {
+  let url;
+  try { url = new URL(settings.baseUrl); } catch { throw new Error('Enter a complete HTTPS API base URL.'); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Use an HTTPS endpoint without credentials, query or fragment.');
+  return url.href.replace(/\/+$/, '') + '/chat/completions';
+}
 async function testConnection() {
   saveSettings();
   const status = document.getElementById('ai-status');
@@ -1184,7 +1153,8 @@ async function testConnection() {
   status.textContent = '🔌 Testing…';
 
   try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
+    const res = await fetch(validatedAIEndpoint(), {
+      signal: AbortSignal.timeout(30000),
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1230,6 +1200,12 @@ async function handleAIAction(action, customText) {
   }
 
   const prompt = action === 'custom' ? customText : AI_PROMPTS[action];
+  let endpoint;
+  try { endpoint = validatedAIEndpoint(); } catch (err) { responsePane.textContent = err.message; return; }
+  if (!confirm('Send titles, URLs, checklist and shortened notes from the entire board to ' + new URL(endpoint).origin + '? This may incur provider charges.')) return;
+  if (aiRequestController) aiRequestController.abort();
+  aiRequestController = new AbortController();
+  const request = aiRequestController;
   const boardContext = getBoardContext();
 
   const messages = [
@@ -1240,7 +1216,8 @@ async function handleAIAction(action, customText) {
   responsePane.innerHTML = '<span class="thinking">Thinking…</span>';
 
   try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
+    const res = await fetch(endpoint, {
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(60000)]),
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1276,6 +1253,7 @@ async function handleAIAction(action, customText) {
 
       while (true) {
         const { done, value } = await reader.read();
+        if (request !== aiRequestController || request.signal.aborted) return;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -1302,6 +1280,7 @@ async function handleAIAction(action, customText) {
       responsePane.textContent = content;
     }
   } catch (err) {
+    if (request !== aiRequestController || request.signal.aborted) return;
     responsePane.innerHTML = '<span style="color:var(--priority-high)">❌ Error: ' + escapeHtml(err.message) + '</span>';
   }
 }
@@ -1405,7 +1384,7 @@ function initGlobalEvents() {
   document.getElementById('archive-empty-btn').addEventListener('click', () => {
     if (archive.length > 0 && confirm('Permanently delete all archived cards? This cannot be undone.')) {
       archive = [];
-      saveArchiveImmediate();
+      saveBoardImmediate();
       renderArchiveList();
     }
   });
@@ -1434,10 +1413,21 @@ function initGlobalEvents() {
   });
 
   // Logout button
-  document.getElementById('logout-btn').addEventListener('click', () => {
-    if (confirm('Sign out of your account?')) {
-      signOutUser();
-    }
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    if (!confirm('Save and sign out of your account?')) return;
+    try { await flushWorkspace(currentUser.uid); await signOutUser(); }
+    catch (err) { alert('Sign-out paused to protect unsaved changes. Export a backup, then retry. ' + err.message); }
+  });
+  document.getElementById('retry-save-btn').onclick = () => { if (currentUser) { saveBoard(); flushWorkspace(currentUser.uid).catch(() => {}); } };
+  window.addEventListener('beforeunload', e => { if (currentUser && hasPendingWorkspace(currentUser.uid)) { e.preventDefault(); e.returnValue = ''; } });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && currentUser) flushWorkspace(currentUser.uid).catch(() => {}); });
+  document.addEventListener('keydown', e => {
+    const overlay = modalOpen ? document.getElementById('modal-overlay') : archiveModalOpen ? document.getElementById('archive-overlay') : null;
+    if (!overlay || e.key !== 'Tab') return;
+    const items = [...overlay.querySelectorAll('button,input,select,textarea,a[href]')].filter(el => !el.disabled);
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
 }
 
@@ -1463,72 +1453,65 @@ function initAppUI() {
   }
 }
 
-// Wire up auth state change to app state mapping
-onUserChanged(async (user) => {
-  currentUser = user;
-  if (user) {
-    // Show email and logout button
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) {
-      emailEl.textContent = user.email;
-      emailEl.title = user.email;
-    }
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) {
-      profileEl.style.display = 'flex';
-    }
-
-    // Load settings from localStorage (remains local)
-    loadSettings();
-
-    try {
-      const data = await loadUserData(user.uid);
-      if (data.board) {
-        board = data.board;
-        archive = data.archive || [];
-      } else {
-        // No board in Firestore. Check for migration
-        if (hasLocalStorageData()) {
-          showMigrationBanner(user.uid, (migratedBoard, migratedArchive) => {
-            board = migratedBoard;
-            archive = migratedArchive;
-            initAppUI();
-          }, () => {
-            // Dismissed / skip migration
-            board = createDefaultBoard();
-            archive = [];
-            saveBoardImmediate();
-            saveArchiveImmediate();
-            initAppUI();
-          });
-          return; // Wait for banner interaction
-        } else {
-          // Fresh board
-          board = createDefaultBoard();
-          archive = [];
-          await Promise.all([
-            saveUserBoardImmediate(user.uid, board),
-            saveUserArchiveImmediate(user.uid, archive)
-          ]);
-        }
+// Session tokens prevent a stale async load from exposing another user's board.
+let authEpoch = 0;
+onUserChanged(async user => {
+  const epoch = ++authEpoch;
+  currentUser = user; board = null; archive = [];
+  if (aiRequestController) aiRequestController.abort();
+  document.getElementById('migration-banner')?.remove();
+  document.getElementById('workspace-load-error')?.remove();
+  document.getElementById('board-container').replaceChildren();
+  closeModal(); closeArchiveModal(); hideContextMenu();
+  document.getElementById('ai-response').textContent = '';
+  document.getElementById('ai-api-key').value = '';
+  if (settings) settings.apiKey = '';
+  document.getElementById('user-profile').style.display = user ? 'flex' : 'none';
+  document.getElementById('user-email').textContent = user?.email || '';
+  document.getElementById('app').inert = true;
+  if (!user) return;
+  loadSettings();
+  try {
+    const data = await loadUserData(user.uid);
+    if (epoch !== authEpoch) return;
+    const recovery = readRecovery(user.uid);
+    if (recovery) {
+      // Explicit recovery, never silent overwrite of a newer remote workspace.
+      if (confirm('Unsynced changes were recovered from this browser. Restore them? Cancel loads the cloud version and keeps the recovery copy.')) {
+        board = recovery.board; archive = recovery.archive;
+        queueWorkspace(user.uid, board, archive);
       }
-      initAppUI();
-    } catch (err) {
-      console.error("Error loading user workspace:", err);
-      // Fallback
-      board = createDefaultBoard();
-      archive = [];
-      initAppUI();
     }
-  } else {
-    // Logged out
-    board = null;
-    archive = [];
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) emailEl.textContent = '';
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) profileEl.style.display = 'none';
-    const container = document.getElementById('board-container');
-    if (container) container.innerHTML = '';
+    if (!board && data.board) { board = data.board; archive = data.archive; }
+    if (!board && hasLocalStorageData()) {
+      showMigrationBanner(user.uid, (b, a) => {
+        if (epoch !== authEpoch) return;
+        board = b; archive = a; document.getElementById('app').inert = false; initAppUI();
+      }, () => {
+        if (epoch !== authEpoch) return;
+        board = createDefaultBoard(); archive = [];
+        document.getElementById('app').inert = false; initAppUI(); saveBoard();
+      });
+      return;
+    }
+    if (!board) { board = createDefaultBoard(); archive = []; queueWorkspace(user.uid, board, archive); }
+    document.getElementById('app').inert = false; initAppUI();
+  } catch (err) {
+    if (epoch !== authEpoch) return;
+    // Never substitute an editable default board after a cloud read failure.
+    const error = document.createElement('div'); error.id = 'workspace-load-error'; error.setAttribute('role', 'alert');
+    const message = document.createElement('p'); message.textContent = 'Workspace could not be loaded. Your cloud data has not been replaced. ' + err.message;
+    const retry = document.createElement('button'); retry.className = 'btn btn-primary'; retry.textContent = 'Reload safely'; retry.onclick = () => location.reload();
+    error.append(message, retry); document.body.append(error);
   }
 });
+if (demoMode) {
+  loadSettings(); board = createDefaultBoard(); archive = [];
+  board.meta.boardTitle = 'AI work, in one place';
+  board.cards[0].title = 'Review the agent’s pull request'; board.cards[0].notes = 'Check the diff, run the tests, then write the handoff.';
+  board.cards[1].title = 'Compare evidence for the next experiment'; board.cards[1].url = 'https://example.com/research'; board.cards[1].aiModel = '';
+  board.cards[2].title = 'Build a reusable context handoff'; board.cards[2].notes = 'Turn the current decision, sources and next step into one compact brief.';
+  board.cards[0].subtasks = [{ id: 'demo-check-1', text: 'Read the diff', done: true }, { id: 'demo-check-2', text: 'Run the regression tests', done: false }];
+  document.getElementById('demo-banner').hidden = false;
+  initAppUI(); showSaveIndicator('saved', 'Demo · changes reset on reload');
+}

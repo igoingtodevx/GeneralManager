@@ -1,5 +1,7 @@
 # FIREBASE_SETUP.md — GeneralManager
 
+> Release candidate 2.1: this guide predates the reliability pass. Keep the same Firebase project and owner-scoped rules. Review RELEASE_REVIEW.md before deployment. Cloud persistence now uses atomic board/archive transactions and revision checks; no realtime listener or emulator certification is claimed. No secrets or deployed rules were changed by this patch.
+
 ## Firebase Services Used
 
 | Service | Purpose |
