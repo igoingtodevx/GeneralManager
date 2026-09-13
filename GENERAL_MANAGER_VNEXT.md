@@ -1,92 +1,118 @@
 # General Manager vNext
 
-## Product thesis
-General Manager is not a Kanban board with an AI sidebar. It is a personal operating surface for capturing, resuming and steering work across AI agents, repositories, research, URLs, notes and unfinished threads.
+## Thesis
+General Manager is not a Kanban board with an AI sidebar. It is a personal operating surface for capturing, resuming, and steering unfinished work across AI agents, repositories, research, URLs, notes, and ideas.
 
-The product must remain fully useful without AI. AI is an optional acceleration layer, never a dependency for basic task and context management.
+The product wins when returning to a half-finished thread takes seconds instead of reconstruction.
 
-## Core job
-The product should answer three questions with almost no friction:
-1. What am I doing right now?
-2. What should I resume next, and why?
-3. What context do I need so I do not have to reconstruct the task from memory?
+## Primitive-first rules
+1. Fix workflow friction before adding agent complexity.
+2. Manual mode must remain complete and trustworthy.
+3. AI is an explicit accelerator, never a hidden dependency.
+4. Prefer one obvious action over a dashboard of controls.
+5. Preserve user control: suggestions preview before state changes.
+6. Preserve existing custom workflows unless migration is explicitly accepted.
+7. Optimize for resume speed, not feature count.
 
-## Primitive-first interaction model
-### Capture
-The global capture field should accept a thought, URL, repo, task or context fragment without forcing the user to decide the final workflow state first.
+## Default workflow
+Fresh workspaces use:
+- `INBOX` — captured but not processed.
+- `NOW` — actively being worked on.
+- `NEXT` — ready to pick up soon.
+- `WAITING` — blocked by a person, system, answer, deployment, or future event.
+- `LATER` — intentionally parked.
+- `DONE` — completed before archive.
 
-Quick Capture must not silently mean "put this in the first column". The current implementation does exactly that. vNext should instead use an explicit capture destination with a remembered default and keyboard-first override.
+An exact legacy `BACKLOG / ACTIVE / PARKED / DONE` board receives an explicit upgrade action. Custom boards are normalized but not renamed.
 
-Recommended default states:
-- INBOX — unprocessed capture
-- NOW — the small set of things actively being worked on
-- NEXT — ready to resume soon
-- WAITING — blocked by another person, system or future event
-- LATER — deliberately parked
-- DONE — completed, with archive as long-term history
+## The resume contract
+A useful card should make these answerable without reopening the original chat:
+1. What is this?
+2. Where does it stand?
+3. What is the next concrete move?
+4. What am I waiting on or worried about?
+5. Which link/repo/tool gets me back into the work?
+6. What compact context would future-me otherwise have to reconstruct?
 
-These names are defaults, not hard requirements. Columns remain editable.
+This is why `Next action`, blocker/waiting context, links, working notes, and last meaningful update are first-class fields.
 
-### Resume
-A card is valuable when it lets the user resume work quickly. The detail surface should therefore prioritize:
-- the next concrete action;
-- current state / blocker;
-- links and repo references;
-- compact working notes;
-- checklist only when useful;
-- last meaningful update;
-- optional AI-generated resume brief.
-
+## Primary surfaces
 ### Focus
-The primary screen should make NOW and NEXT visually dominant. Everything else is supporting context. The product should resist becoming a database-shaped dumping ground.
+The daily surface. It reduces the workspace to NOW / NEXT / WAITING when those states exist. The goal is attention, not complete information density.
 
-## AI model
-AI is opt-in at both product and action level.
+### Board
+The full configurable workflow. It supports drag/drop, inline capture, editable columns, and the complete state space.
 
-Manual mode:
-- all capture, organization, editing, search, filtering, movement and export work without any model or API key;
-- no board content is sent to a model.
+### Inspector
+The resume/edit surface. It autosaves and keeps `Next action` prominent. A card should be editable without entering a save/cancel ceremony.
 
-AI mode:
-- individual actions clearly state what context will be sent;
-- the user can choose provider/model;
-- board-wide AI is never required to use the product.
+### Command palette
+`Ctrl/Cmd + K` is the universal jump/action surface. It searches cards and exposes a small set of high-value commands rather than becoming a second settings menu.
 
-High-value AI actions are workflow actions, not chat-for-chat's-sake:
-- Turn a messy capture into title + next action + useful notes.
-- Create a short resume brief for a stale card.
-- Detect likely duplicates / related cards.
-- Suggest a destination (NOW/NEXT/WAITING/LATER) without moving anything silently.
-- Summarize what changed since the card was last active.
-- Convert a long note into a compact handoff for another agent.
+## Capture
+Quick Capture must never silently decide an important state transition.
+- Destination is explicit.
+- Last destination is remembered.
+- URLs are detected automatically.
+- Enter captures immediately.
+- Per-column inline capture exists when location is already obvious.
 
-The existing board-summary / standup actions can remain, but they are secondary.
+## Handoffs
+A deterministic local handoff is always available without AI. It contains the card's state, type, priority, next action, blocker, link, tool/model, notes, and checklist.
 
-## Interaction principles
-- One obvious primary action per surface.
-- Keyboard first, mouse friendly.
-- No mandatory modal for quick work.
-- Do not ask for metadata before it becomes useful.
-- Preserve user control: suggestions are previews until accepted.
-- Prefer a few strong states over many clever statuses.
-- Avoid AI-specific decoration when a normal UI control is clearer.
-- Every automation must have a visible manual equivalent.
+This is intentionally useful with Hermes, ChatGPT, Claude, Codex, or any future agent without coupling General Manager to one provider.
 
-## First implementation run
-1. Fix Quick Capture so destination is explicit and remembered instead of always using `board.columns[0]`.
-2. Add INBOX-aware defaults for new boards while preserving existing user boards and custom columns.
-3. Replace prompt-based per-column add with inline entry.
-4. Make card editing faster: autosave or save-on-close, fewer modal fields competing for attention.
-5. Add a compact `Next action` field and show it directly on cards when present.
-6. Make AI controls explicitly optional and explain privacy at the point of use.
-7. Add keyboard shortcuts for capture destination and opening the command surface.
+## AI boundary
+AI is optional and invoked only by explicit actions.
 
-## Second implementation run
-1. Add a command palette / universal action surface instead of accumulating toolbar buttons.
-2. Add Focus view: NOW + NEXT + WAITING, without destroying the board view.
-3. Add stale/resume signals based on local data, no AI required.
-4. Add optional AI `Refine capture`, `Resume`, `Route` and `Handoff` actions.
-5. Improve responsive behavior so the manager works on narrower screens.
+High-value card actions:
+- **Refine** — propose cleaner structure for a messy card.
+- **Resume brief** — summarize where it stands, next move, and risks.
+- **Route** — suggest a destination and reason.
+- **AI handoff** — package the card for another capable agent.
+
+Rules:
+- Card actions send only the active card context.
+- Refine and Route remain previews until accepted.
+- AI failure must never block normal work.
+- Manual capture, search, movement, archive, backup, and local handoff remain complete.
 
 ## Quality bar
-The finished product should feel faster than opening a notes app, clearer than a generic Kanban board, and more trustworthy than an AI-first task manager. The "wow" should come from how little context the user has to reconstruct, not from animated AI output.
+General Manager should feel:
+- faster than opening a notes app,
+- clearer than generic Kanban,
+- more controlled than an AI-first task manager,
+- dense enough for a power user without becoming visually noisy.
+
+The wow effect should come from **less reconstruction**, not animated AI.
+
+## Desktop direction
+Do not wrap the web app merely to call it desktop software. First prove the workflow.
+
+When the browser version is stable enough to use daily, the desktop build should earn its existence through OS-level capabilities such as:
+- global capture hotkey,
+- native deep links / protocol handling,
+- secure credential storage,
+- optional local-first persistence / offline mode,
+- clipboard/file/repo context capture,
+- tray/quick-capture surface.
+
+Tauri or another small native shell can be evaluated then. The browser product model should not depend on that choice.
+
+## Implemented first run
+- v2 domain model in `core.js`.
+- Focus + Board surfaces.
+- explicit destination capture.
+- side inspector + autosave.
+- next action, blocker, stale cues, checklist, local handoff.
+- command palette and keyboard workflow.
+- explicit card-level AI actions.
+- responsive shell.
+- JSON import/export and archive preserved.
+- Firebase auth/Firestore persistence preserved through an explicit compatibility boundary.
+- Node-native core tests + headless-Chrome runtime smoke in CI.
+
+## Still requires human use before merge
+Automated tests can prove boot, domain behavior, persistence boundaries, and key controller wiring. They cannot decide whether the Focus density, capture destination UX, inspector rhythm, or keyboard flow actually feels good during a real workday.
+
+That final product judgment should happen on the preview before production merge.
