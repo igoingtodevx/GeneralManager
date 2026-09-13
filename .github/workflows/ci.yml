@@ -17,3 +17,5 @@ jobs:
         run: node --check core.js && node --check app.js
       - name: Core tests
         run: npm test
+      - name: Browser smoke
+        run: bash tests/browser-smoke.sh
