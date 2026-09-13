@@ -1,50 +1,93 @@
-# GeneralManager — Context & Task Manager
+# General Manager
 
-GeneralManager is a browser-based personal context and task manager for organizing work across AI agents, research, repositories, URLs, notes, and ideas.
+General Manager is an experiment in building **one calm control surface above work, life, apps, agents and unfinished commitments**.
 
-**Status:** Implemented static web app with Firebase authentication and per-user Firestore data sync. No build step is required.
+The product thesis is simple:
 
-**Live deployment (anonymous check):** <https://general-manager-tau.vercel.app>
+> Everything can come in. Very little gets to interrupt you.
 
-## Product and current scope
+It is deliberately not another Kanban board, not an AI chat wrapped around a todo list, and not a system that only works while perfectly maintained.
 
-Implemented in this repository:
+## Core model
 
-- Kanban board with editable columns and draggable cards.
-- Quick capture, card types, priorities, search, filters, checklists, notes, URLs, duplicate/delete/archive actions, and archive restore.
-- JSON import/export and a one-time migration path from older local browser data.
-- Email/password sign-up, sign-in, persistence, and sign-out through Firebase Authentication.
-- Per-user board and archive persistence through Cloud Firestore.
-- Optional browser-side AI assistant panel with OpenAI-compatible, OpenRouter, NVIDIA NIM, or custom endpoints.
+Everything enters as an item, but the user does not live in a backlog.
 
-Not implemented here:
+- **Desk** — a deliberately finite attention surface. Capacity is 1, 3 or 5 items.
+- **Inbox** — capture freely, then triage one item at a time.
+- **Everything** — the full searchable map, available when needed but never the default daily view.
+- **Sources** — the layer for apps, people, agents, feeds and automations. Sources may create input; they do not get to own attention.
+- **Regroup** — a re-entry flow after absence or pile-up. It surfaces only a few meaningful decisions instead of forcing the user to process the entire debt pile.
 
-- A server-side API or AI proxy. AI requests are made by the browser to the endpoint selected by the user.
-- A mobile-first layout; the current UI declares a 1024px minimum width.
-- A package-manager build, backend service, or automated test suite.
+Internally, items still have lightweight states (`INBOX`, `NOW`, `QUEUE`, `WAITING`, `LATER`, `DONE`), but those states are an implementation detail rather than the interface metaphor.
 
-The repository contains `FIREBASE_SETUP.md`, `firestore.rules`, `firebase-config.js`, and `vercel.json` for deployment and Firebase setup. Future backend or mobile work should be treated as planned rather than available functionality.
+## Why this exists
 
-## Evidence-backed stack
+Most productivity systems fail exactly when life gets messy. Once there are multiple lists, ignored reminders, unread agent runs, old follow-ups and half-finished projects, the system itself becomes another source of pressure.
 
-- HTML, CSS, and browser JavaScript; no framework or bundler is present.
-- Firebase's browser-compatible SDK for Authentication and Cloud Firestore.
-- Vercel static deployment configuration; no build command is needed.
+General Manager is designed around the opposite assumption: **the user will periodically disappear, ignore things, change tools and come back to chaos.** Re-entry is therefore a first-class workflow, not an edge case.
+
+## Current experiment
+
+- Finite Desk capacity with Light (1), Normal (3) and Full (5) modes.
+- Universal capture for tasks, projects, follow-ups, ideas, references and routines.
+- One-at-a-time Inbox triage.
+- Deterministic attention scoring based on explicit state, priority and dates.
+- Regroup candidates for stale active work, old waiting items, aging Inbox items and near/overdue dates.
+- Searchable Everything view.
+- Source grouping so repeated inputs can eventually be summarized below the attention layer.
+- Autosaving item inspector with next move, area, effort, date, waiting context, source context and small steps.
+- Deterministic local handoff text that works without AI.
+- Optional item-level AI actions: make the next move smaller, create a re-entry brief, clean context, or prepare a handoff.
+- Keyboard capture (`/`) and universal search / commands (`Ctrl/Cmd + K`).
+
+## AI boundary
+
+Manual mode is the complete product. Capture, triage, search, state changes, regrouping, source grouping, export/import and local handoffs do not require a model.
+
+AI is only invoked by explicit actions on a single item. There is no requirement to send the whole workspace to a model.
+
+The current browser prototype calls an OpenAI-compatible endpoint directly. API credentials remain in browser `localStorage`, which is suitable for a private prototype but not for a hardened desktop product.
+
+## Storage safety
+
+This branch is intentionally isolated from the existing GeneralManager board model.
+
+- Existing production data remains in `users/{uid}/data/board`.
+- The life-harness experiment writes to `users/{uid}/data/harness-v3`.
+- On first use, the experiment may read the old board as a seed and migrate it in memory.
+- It never rewrites the legacy board document.
+
+This allows the old product and the experiment to be used in parallel without destructive migration.
+
+## Architecture
+
+The prototype deliberately remains small:
+
+- `index.html` — static shell.
+- `styles.css` — manager interface and responsive layout.
+- `core.js` — pure workspace, migration, scoring, regroup and source-group logic.
+- `app.js` — browser controller and interaction layer.
+- `harness-db.js` — isolated Firestore persistence for the experiment.
+- `auth.js` / `db.js` — existing authentication and legacy storage compatibility.
+
+There is still no framework, bundler or application backend.
 
 ## Run locally
-
-Serve the repository over HTTP (recommended because the app loads external SDK scripts and Firebase resources):
 
 ```bash
 python3 -m http.server 8080
 ```
 
-Open <http://localhost:8080> and create or sign in to an account. To use your own Firebase project, follow [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md) and publish rules equivalent to [`firestore.rules`](firestore.rules). The checked-in client configuration is project-specific; replace it when deploying a fork.
+Then open `http://localhost:8080`.
 
-## Data and security limitations
+## Tests
 
-- Board and archive data are intended to be isolated per authenticated Firebase user, subject to the deployed Firestore rules.
-- AI settings, including provider credentials entered in the UI, remain in the browser's `localStorage`. `localStorage` is not a secure secret store; do not use a shared browser or expose long-lived keys unnecessarily.
-- The Firebase web configuration identifies a client project but does not replace Authentication or Firestore security rules.
-- There is no server-side secret protection, rate limiting, or multi-tenant administration layer in this repository.
-- The public deployment is suitable for evaluating the UI, not proof that a custom Firebase project or production security review has been completed.
+```bash
+npm test
+```
+
+CI also runs syntax checks and a real headless-Chrome runtime smoke test through the Chrome DevTools Protocol.
+
+## Product contract
+
+See [`LIFE_HARNESS.md`](LIFE_HARNESS.md). That document is intentionally more important than any individual UI implementation.

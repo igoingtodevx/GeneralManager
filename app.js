@@ -1,1534 +1,1001 @@
-// app.js
+import {
+  STATES,
+  KINDS,
+  PRIORITIES,
+  EFFORTS,
+  CAPACITY_SLOTS,
+  createDefaultWorkspace,
+  normalizeWorkspace,
+  normalizeItem,
+  captureItem,
+  setItemState,
+  duplicateItem,
+  deskItems,
+  inboxItems,
+  waitingItems,
+  regroupCandidates,
+  sourceGroups,
+  briefStats,
+  itemMatches,
+  relativeTime,
+  itemToHandoff,
+  dueInfo,
+  staleInfo,
+  makeId
+} from './core.js';
+import { loadUserHarness, saveUserHarness, saveUserHarnessImmediate } from './harness-db.js';
 
-const TYPES = ['AGENT', 'RESEARCH', 'REPO', 'URL', 'NOTE', 'IDEA'];
-const TYPE_ICONS = { AGENT: '🤖', RESEARCH: '🔬', REPO: '📦', URL: '🔗', NOTE: '📝', IDEA: '💡' };
-const PRIORITIES = ['HIGH', 'MED', 'LOW'];
-const MAX_COLUMNS = 8;
 const LS_SETTINGS = 'gm_settings';
+const DAY = 86_400_000;
+const $ = id => document.getElementById(id);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-// Column Color Presets
-const COLUMN_COLORS = {
-  PURPLE: { hex: '#7c3aed', bg: 'rgba(124, 58, 237, 0.15)', name: 'Purple' },
-  BLUE: { hex: '#0ea5e9', bg: 'rgba(14, 165, 233, 0.15)', name: 'Blue' },
-  GREEN: { hex: '#10b981', bg: 'rgba(16, 185, 129, 0.15)', name: 'Green' },
-  YELLOW: { hex: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)', name: 'Yellow' },
-  PINK: { hex: '#ec4899', bg: 'rgba(236, 72, 153, 0.15)', name: 'Pink' },
-  GRAY: { hex: '#6b7280', bg: 'rgba(107, 114, 128, 0.15)', name: 'Gray' }
-};
-const DEFAULT_INDEX_COLORS = ['PURPLE', 'GREEN', 'YELLOW', 'GRAY'];
-
-// STATE
-let board = null;
-let settings = null;
-let archive = [];
-let filterType = 'ALL';
-let filterPriority = 'ALL';
-let searchQuery = '';
-let draggedCardId = null;
-let activeModalCardId = null;
-let modalOpen = false;
-let activeModalSubtasks = [];
-let archiveSearchQuery = '';
-let archiveModalOpen = false;
-
+let workspace = null;
 let currentUser = null;
-let listenersInitialized = false;
+let activeItemId = null;
+let currentView = 'desk';
+let everythingState = 'ALL';
+let commandIndex = 0;
+let commandEntries = [];
+let settings = loadSettings();
+let listenersReady = false;
 
-// ═══════════════════════════════════════════════════════════
-// PERSISTENCE (Firestore adaptors)
-// ═══════════════════════════════════════════════════════════
-function saveBoard() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoard(currentUser.uid, board);
-    }
-  }
-}
-
-function saveBoardImmediate() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoardImmediate(currentUser.uid, board);
-    }
-  }
+function toast(message) {
+  const region = $('toast-region');
+  if (!region) return;
+  const node = document.createElement('div');
+  node.className = 'toast';
+  node.textContent = message;
+  region.appendChild(node);
+  setTimeout(() => node.remove(), 2600);
 }
 
 function loadSettings() {
   try {
-    const raw = localStorage.getItem(LS_SETTINGS);
-    if (raw) { settings = JSON.parse(raw); return; }
-  } catch (e) { /* reset */ }
-  settings = { baseUrl: '', apiKey: '', model: '' };
+    return { baseUrl: '', apiKey: '', model: '', ...JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}') };
+  } catch {
+    return { baseUrl: '', apiKey: '', model: '' };
+  }
 }
 
-function saveSettings() {
-  settings.baseUrl = document.getElementById('ai-base-url').value;
-  settings.apiKey = document.getElementById('ai-api-key').value;
-  settings.model = document.getElementById('ai-model').value;
+function persistSettings() {
+  settings = {
+    baseUrl: $('ai-base-url')?.value.trim() || '',
+    apiKey: $('ai-api-key')?.value.trim() || '',
+    model: $('ai-model')?.value.trim() || ''
+  };
   localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
 }
 
-function saveArchive() {
-  if (currentUser) {
-    saveUserArchive(currentUser.uid, archive);
-  }
+function saveWorkspace(immediate = false) {
+  if (!workspace || !currentUser) return;
+  workspace.meta.title = $('board-title')?.value.trim() || workspace.meta.title || 'General Manager';
+  const save = immediate ? saveUserHarnessImmediate : saveUserHarness;
+  save(currentUser.uid, workspace);
 }
 
-function saveArchiveImmediate() {
-  if (currentUser) {
-    saveUserArchiveImmediate(currentUser.uid, archive);
-  }
+function activeItem() {
+  return workspace?.items.find(item => item.id === activeItemId) || null;
 }
 
-// ═══════════════════════════════════════════════════════════
-// DEFAULT BOARD
-// ═══════════════════════════════════════════════════════════
-function createDefaultBoard() {
-  const cols = [
-    { id: crypto.randomUUID(), name: 'BACKLOG', order: 0 },
-    { id: crypto.randomUUID(), name: 'ACTIVE', order: 1 },
-    { id: crypto.randomUUID(), name: 'PARKED', order: 2 },
-    { id: crypto.randomUUID(), name: 'DONE', order: 3 }
-  ];
-  const now = Date.now();
-  const cards = [
-    {
-      id: crypto.randomUUID(), columnId: cols[0].id, type: 'AGENT', title: 'Set up Codex agent for repo analysis',
-      url: '', notes: 'Need to configure the agent with proper context window settings and tool access.', priority: 'MED',
-      aiModel: 'gpt-4o', order: 0, createdAt: now - 7200000, updatedAt: now - 3600000
-    },
-    {
-      id: crypto.randomUUID(), columnId: cols[1].id, type: 'RESEARCH', title: 'Deep dive: transformer attention patterns',
-      url: 'https://arxiv.org/abs/2401.00001', notes: '', priority: 'HIGH',
-      aiModel: 'gemini-2.5-pro', order: 0, createdAt: now - 86400000, updatedAt: now - 43200000
-    },
-    {
-      id: crypto.randomUUID(), columnId: cols[2].id, type: 'IDEA', title: 'Build a context-switching dashboard',
-      url: '', notes: 'Prototype idea: visualize all active AI sessions with their token usage and last activity.', priority: 'LOW',
-      aiModel: '', order: 0, createdAt: now - 172800000, updatedAt: now - 86400000
-    }
-  ];
-  return { columns: cols, cards: cards, meta: { boardTitle: 'GeneralManager', lastType: 'NOTE' } };
+function stateLabel(state) {
+  return ({ INBOX: 'Inbox', NOW: 'Now', QUEUE: 'Queue', WAITING: 'Waiting', LATER: 'Later', DONE: 'Done' })[state] || state;
 }
 
-// ═══════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════
-function relativeTime(ts) {
-  const diff = Date.now() - ts;
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return min + 'm ago';
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return hr + 'h ago';
-  const days = Math.floor(hr / 24);
-  if (days < 30) return days + 'd ago';
-  const months = Math.floor(days / 30);
-  return months + 'mo ago';
+function kindLabel(kind) {
+  return ({ TASK: 'Task', PROJECT: 'Project', FOLLOWUP: 'Follow-up', IDEA: 'Idea', REFERENCE: 'Reference', ROUTINE: 'Routine' })[kind] || kind;
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+function daypart() {
+  const hour = new Date().getHours();
+  if (hour < 5) return 'Late night';
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
 }
 
-function isUrl(str) {
-  return /^https?:\/\//i.test(str.trim());
+function formatDue(item) {
+  const info = dueInfo(item);
+  if (!info.hasDue) return null;
+  const date = new Date(info.timestamp);
+  const text = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (info.overdue) return { text: `Date passed · ${text}`, className: 'overdue' };
+  if (info.ms <= DAY) return { text: `Today · ${text}`, className: 'due' };
+  if (info.ms <= 3 * DAY) return { text: `Soon · ${text}`, className: 'due' };
+  return { text, className: '' };
 }
 
-function getCardsForColumn(colId) {
-  if (!board || !board.cards) return [];
-  return board.cards
-    .filter(c => c.columnId === colId)
-    .sort((a, b) => a.order - b.order);
+function isTypingTarget(target) {
+  return target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
 }
 
-function cardMatchesFilters(card) {
-  if (filterType !== 'ALL' && card.type !== filterType) return false;
-  if (filterPriority !== 'ALL' && card.priority !== filterPriority) return false;
-  if (searchQuery) {
-    const q = searchQuery.toLowerCase();
-    const inTitle = card.title.toLowerCase().includes(q);
-    const inNotes = (card.notes || '').toLowerCase().includes(q);
-    if (!inTitle && !inNotes) return false;
-  }
-  return true;
+function setView(view, persist = true) {
+  if (!workspace) return;
+  currentView = ['desk', 'inbox', 'everything', 'sources'].includes(view) ? view : 'desk';
+  $$('.view').forEach(node => node.classList.add('hidden'));
+  $(`${currentView}-view`)?.classList.remove('hidden');
+  $$('.nav-tab').forEach(button => button.classList.toggle('active', button.dataset.view === currentView));
+  workspace.meta.preferredView = currentView;
+  if (persist) saveWorkspace();
+  if (currentView === 'inbox') renderInbox();
+  if (currentView === 'everything') setTimeout(() => $('everything-search')?.focus(), 0);
 }
 
-function nextPriority(current) {
-  const idx = PRIORITIES.indexOf(current);
-  return PRIORITIES[(idx + 1) % PRIORITIES.length];
+function renderAll() {
+  if (!workspace) return;
+  $('board-title').value = workspace.meta.title || 'General Manager';
+  renderNav();
+  renderDesk();
+  renderInbox();
+  renderEverything();
+  renderSources();
+  renderCapacity();
+  if (activeItemId && !activeItem()) closeInspector();
 }
 
-// ═══════════════════════════════════════════════════════════
-// RENDER BOARD
-// ═══════════════════════════════════════════════════════════
-function renderBoard() {
-  const container = document.getElementById('board-container');
-  if (!container) return;
-  container.innerHTML = '';
-
-  if (!board || !board.columns) return;
-
-  const sortedCols = [...board.columns].sort((a, b) => a.order - b.order);
-
-  for (const col of sortedCols) {
-    const colEl = document.createElement('div');
-    colEl.className = 'column';
-    colEl.dataset.columnId = col.id;
-
-    // Apply color theme dynamically
-    const themeName = col.color || DEFAULT_INDEX_COLORS[col.order % DEFAULT_INDEX_COLORS.length];
-    const colorTheme = COLUMN_COLORS[themeName] || COLUMN_COLORS.GRAY;
-    colEl.style.setProperty('--col-accent', colorTheme.hex);
-    colEl.style.setProperty('--col-accent-bg', colorTheme.bg);
-
-    const colCards = getCardsForColumn(col.id);
-    const visibleCards = colCards.filter(cardMatchesFilters);
-
-    // Header
-    const header = document.createElement('div');
-    header.className = 'column-header';
-    header.style.cursor = 'context-menu';
-    header.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showColumnContextMenu(e, col.id);
-    });
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'column-name';
-    nameEl.textContent = col.name;
-    nameEl.addEventListener('dblclick', () => {
-      nameEl.contentEditable = 'true';
-      nameEl.classList.add('editing');
-      nameEl.focus();
-      const range = document.createRange();
-      range.selectNodeContents(nameEl);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    });
-    const finishRename = () => {
-      nameEl.contentEditable = 'false';
-      nameEl.classList.remove('editing');
-      col.name = nameEl.textContent.trim() || col.name;
-      nameEl.textContent = col.name;
-      saveBoard();
-      renderBoard();
-    };
-    nameEl.addEventListener('blur', finishRename);
-    nameEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
-    });
-
-    const countEl = document.createElement('div');
-    countEl.className = 'column-count';
-    countEl.textContent = colCards.length;
-
-    header.appendChild(nameEl);
-    header.appendChild(countEl);
-    colEl.appendChild(header);
-
-    // Body
-    const body = document.createElement('div');
-    body.className = 'column-body';
-    body.dataset.columnId = col.id;
-
-    // Drag events on column body
-    body.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      body.classList.add('drag-over');
-
-      // Intra-column reorder: find closest card to insert before
-      const afterEl = getDragAfterElement(body, e.clientY);
-      const existing = body.querySelector('.drop-placeholder');
-      if (!existing) {
-        const placeholder = document.createElement('div');
-        placeholder.className = 'drop-placeholder';
-        if (afterEl) body.insertBefore(placeholder, afterEl);
-        else body.appendChild(placeholder);
-      } else {
-        if (afterEl) body.insertBefore(existing, afterEl);
-        else body.appendChild(existing);
-      }
-    });
-
-    body.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      body.classList.add('drag-over');
-    });
-
-    body.addEventListener('dragleave', (e) => {
-      if (!body.contains(e.relatedTarget)) {
-        body.classList.remove('drag-over');
-        const ph = body.querySelector('.drop-placeholder');
-        if (ph) ph.remove();
-      }
-    });
-
-    body.addEventListener('drop', (e) => {
-      e.preventDefault();
-      body.classList.remove('drag-over');
-      const ph = body.querySelector('.drop-placeholder');
-      if (ph) ph.remove();
-
-      if (!draggedCardId) return;
-      const card = board.cards.find(c => c.id === draggedCardId);
-      if (!card) return;
-
-      card.columnId = col.id;
-      card.updatedAt = Date.now();
-
-      // Compute new order
-      const afterEl = getDragAfterElement(body, e.clientY);
-      const colCardsNow = getCardsForColumn(col.id).filter(c => c.id !== card.id);
-
-      if (afterEl) {
-        const afterId = afterEl.dataset.cardId;
-        const afterIdx = colCardsNow.findIndex(c => c.id === afterId);
-        colCardsNow.splice(afterIdx, 0, card);
-      } else {
-        colCardsNow.push(card);
-      }
-      colCardsNow.forEach((c, i) => c.order = i);
-
-      saveBoard();
-      renderBoard();
-    });
-
-    if (visibleCards.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'column-empty';
-      empty.textContent = 'Drop here or quick-add below';
-      body.appendChild(empty);
-    } else {
-      for (const card of visibleCards) {
-        body.appendChild(renderCard(card));
-      }
-    }
-
-    colEl.appendChild(body);
-
-    // Footer with quick-add
-    const footer = document.createElement('div');
-    footer.className = 'column-footer';
-    const quickAdd = document.createElement('button');
-    quickAdd.className = 'column-quick-add';
-    quickAdd.textContent = '+ Add card';
-    quickAdd.addEventListener('click', () => {
-      const title = prompt('Card title:');
-      if (!title || !title.trim()) return;
-      createCard(title.trim(), board.meta.lastType || 'NOTE', col.id);
-    });
-    footer.appendChild(quickAdd);
-    colEl.appendChild(footer);
-
-    container.appendChild(colEl);
-  }
-
-  // Add Column button
-  if (board.columns.length < MAX_COLUMNS) {
-    const addColBtn = document.createElement('button');
-    addColBtn.id = 'add-column-btn';
-    addColBtn.textContent = '+';
-    addColBtn.title = 'Add column (max ' + MAX_COLUMNS + ')';
-    addColBtn.addEventListener('click', () => {
-      const name = prompt('Column name:');
-      if (!name || !name.trim()) return;
-      board.columns.push({
-        id: crypto.randomUUID(),
-        name: name.trim().toUpperCase(),
-        order: board.columns.length
-      });
-      saveBoard();
-      renderBoard();
-    });
-    container.appendChild(addColBtn);
-  }
+function renderNav() {
+  const count = inboxItems(workspace).length;
+  $('inbox-nav-count').textContent = count ? String(count) : '';
 }
 
-function renderCard(card) {
-  const el = document.createElement('div');
-  el.className = 'card';
-  el.dataset.cardId = card.id;
-  el.dataset.type = card.type;
-  el.draggable = true;
+function renderCapacity() {
+  const mode = workspace.meta.capacityMode || 'NORMAL';
+  $$('#capacity-switch button').forEach(button => button.classList.toggle('active', button.dataset.capacity === mode));
+  $('capacity-copy').textContent = mode === 'LIGHT' ? 'One thing is enough.' : mode === 'FULL' ? 'Five things, still finite.' : 'Three things is enough.';
+}
 
-  // Drag
-  el.addEventListener('dragstart', (e) => {
-    draggedCardId = card.id;
-    el.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', card.id);
-  });
-  el.addEventListener('dragend', () => {
-    draggedCardId = null;
-    el.classList.remove('dragging');
-    document.querySelectorAll('.drag-over').forEach(d => d.classList.remove('drag-over'));
-    document.querySelectorAll('.drop-placeholder').forEach(p => p.remove());
-  });
+function createPill(text, className = '') {
+  const node = document.createElement('span');
+  node.className = `pill${className ? ` ${className}` : ''}`;
+  node.textContent = text;
+  return node;
+}
 
-  // Click -> open modal
-  el.addEventListener('click', (e) => {
-    if (e.target.classList.contains('card-priority') || e.target.classList.contains('card-url')) return;
-    openModal(card.id);
-  });
+function managerCard(item, index = 0) {
+  const card = document.createElement('article');
+  card.className = `manager-card${index === 0 ? ' primary' : ''}`;
+  card.tabIndex = 0;
 
-  // Right-click -> context menu
-  el.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    showContextMenu(e, card.id);
-  });
-
-  // Header
-  const header = document.createElement('div');
-  header.className = 'card-header';
+  const kicker = document.createElement('div');
+  kicker.className = 'card-kicker';
+  const left = document.createElement('span');
+  left.textContent = item.area || kindLabel(item.kind);
+  const right = document.createElement('span');
+  right.textContent = stateLabel(item.state);
+  kicker.append(left, right);
 
   const title = document.createElement('div');
   title.className = 'card-title';
-  title.textContent = card.title;
+  title.textContent = item.title;
 
-  const priority = document.createElement('div');
-  priority.className = 'card-priority';
-  priority.dataset.priority = card.priority;
-  priority.title = 'Priority: ' + card.priority + ' (click to cycle)';
-  priority.addEventListener('click', (e) => {
-    e.stopPropagation();
-    card.priority = nextPriority(card.priority);
-    card.updatedAt = Date.now();
-    saveBoard();
-    renderBoard();
-  });
+  const next = document.createElement('div');
+  next.className = 'card-next';
+  next.textContent = item.nextAction || 'Decide the next move';
 
-  header.appendChild(title);
-  header.appendChild(priority);
-  el.appendChild(header);
-
-  // Meta row
   const meta = document.createElement('div');
   meta.className = 'card-meta';
+  meta.appendChild(createPill(item.effort.toLowerCase()));
+  if (item.priority === 'HIGH') meta.appendChild(createPill('high priority'));
+  const due = formatDue(item);
+  if (due) meta.appendChild(createPill(due.text, due.className));
+  if (item.sourceLabel) meta.appendChild(createPill(item.sourceLabel));
 
-  const typeTag = document.createElement('span');
-  typeTag.className = 'card-tag type-tag';
-  typeTag.dataset.type = card.type;
-  typeTag.textContent = TYPE_ICONS[card.type] + ' ' + card.type;
-  meta.appendChild(typeTag);
+  const actions = document.createElement('div');
+  actions.className = 'card-actions';
+  const done = document.createElement('button');
+  done.className = 'btn btn-success btn-sm';
+  done.textContent = 'Done';
+  done.addEventListener('click', event => {
+    event.stopPropagation();
+    setItemState(workspace, item.id, 'DONE');
+    saveWorkspace();
+    renderAll();
+    toast('Done. Off your desk.');
+  });
+  const later = document.createElement('button');
+  later.className = 'btn btn-quiet btn-sm';
+  later.textContent = 'Not now';
+  later.addEventListener('click', event => {
+    event.stopPropagation();
+    setItemState(workspace, item.id, 'LATER');
+    saveWorkspace();
+    renderAll();
+    toast('Parked.');
+  });
+  actions.append(done, later);
 
-  if (card.aiModel) {
-    const aiTag = document.createElement('span');
-    aiTag.className = 'card-tag ai-tag';
-    aiTag.textContent = card.aiModel;
-    meta.appendChild(aiTag);
-  }
-
-  if (card.subtasks && card.subtasks.length > 0) {
-    const doneCount = card.subtasks.filter(s => s.done).length;
-    const subtaskTag = document.createElement('span');
-    subtaskTag.className = 'card-tag';
-    subtaskTag.style.background = 'rgba(255, 255, 255, 0.04)';
-    subtaskTag.style.border = '1px solid var(--border-color)';
-    subtaskTag.style.color = 'var(--text-muted)';
-    subtaskTag.textContent = `📋 ${doneCount}/${card.subtasks.length}`;
-    meta.appendChild(subtaskTag);
-  }
-
-  const time = document.createElement('span');
-  time.className = 'card-time';
-  time.textContent = relativeTime(card.updatedAt);
-  time.title = 'Updated: ' + new Date(card.updatedAt).toLocaleString();
-  meta.appendChild(time);
-
-  el.appendChild(meta);
-
-  // URL
-  if (card.url) {
-    const urlLink = document.createElement('a');
-    urlLink.className = 'card-url';
-    urlLink.href = card.url;
-    urlLink.target = '_blank';
-    urlLink.rel = 'noopener';
-    urlLink.textContent = card.url;
-    urlLink.addEventListener('click', (e) => e.stopPropagation());
-    el.appendChild(urlLink);
-  }
-
-  return el;
+  card.append(kicker, title, next, meta, actions);
+  const open = () => openInspector(item.id);
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+  });
+  return card;
 }
 
-function getDragAfterElement(container, y) {
-  const cards = [...container.querySelectorAll('.card:not(.dragging)')];
-  let closest = null;
-  let closestOffset = Number.NEGATIVE_INFINITY;
+function renderDesk() {
+  $('daypart-label').textContent = `${daypart()} · your desk`;
+  const stats = briefStats(workspace);
+  const desk = deskItems(workspace);
+  const nowRoot = $('desk-now-list');
+  nowRoot.replaceChildren();
 
-  for (const card of cards) {
-    const box = card.getBoundingClientRect();
-    const offset = y - box.top - box.height / 2;
-    if (offset < 0 && offset > closestOffset) {
-      closestOffset = offset;
-      closest = card;
-    }
+  if (!desk.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.innerHTML = '<strong>Your desk is clear.</strong>Pull something forward only when it deserves attention.';
+    nowRoot.appendChild(empty);
+  } else {
+    desk.forEach((item, index) => nowRoot.appendChild(managerCard(item, index)));
   }
-  return closest;
-}
 
-// ═══════════════════════════════════════════════════════════
-// CARD CRUD
-// ═══════════════════════════════════════════════════════════
-function createCard(title, type, columnId) {
-  const col = columnId || board.columns[0].id;
-  const now = Date.now();
-  const colCards = getCardsForColumn(col);
-  let url = '';
-  if (isUrl(title)) {
-    url = title.trim();
-    type = 'URL';
+  const brief = [];
+  if (stats.doneToday) brief.push(`${stats.doneToday} finished today`);
+  if (stats.inbox) brief.push(`${stats.inbox} waiting in Inbox`);
+  if (stats.waiting) brief.push(`${stats.waiting} waiting on something`);
+  if (!brief.length) brief.push('Nothing is asking for cleanup');
+  $('manager-brief').textContent = brief.join(' · ');
+
+  const attention = regroupCandidates(workspace).slice(0, 4);
+  const attentionRoot = $('desk-attention-list');
+  attentionRoot.replaceChildren();
+  if (!attention.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.innerHTML = '<strong>No cleanup pressure.</strong>Nothing currently needs a regroup decision.';
+    attentionRoot.appendChild(empty);
+  } else {
+    attention.forEach(entry => {
+      const row = document.createElement('div');
+      row.className = 'attention-row';
+      const reason = document.createElement('span');
+      reason.className = 'attention-reason';
+      reason.textContent = entry.reason;
+      const copy = document.createElement('div');
+      copy.className = 'attention-copy';
+      const title = document.createElement('strong');
+      title.textContent = entry.item.title;
+      const next = document.createElement('span');
+      next.textContent = entry.item.nextAction || `Currently ${stateLabel(entry.item.state)}`;
+      copy.append(title, next);
+      row.append(reason, copy);
+      row.addEventListener('click', () => openInspector(entry.item.id));
+      attentionRoot.appendChild(row);
+    });
   }
-  const card = {
-    id: crypto.randomUUID(),
-    columnId: col,
-    type: type,
-    title: title,
-    url: url,
-    notes: '',
-    priority: 'MED',
-    aiModel: '',
-    order: colCards.length,
-    createdAt: now,
-    updatedAt: now
-  };
-  board.cards.push(card);
-  board.meta.lastType = type;
-  saveBoard();
-  renderBoard();
+
+  const hidden = stats.hiddenFromDesk;
+  const quiet = [];
+  if (stats.waiting) quiet.push(`${stats.waiting} waiting`);
+  if (stats.later) quiet.push(`${stats.later} parked for later`);
+  if (stats.queue) quiet.push(`${stats.queue} in queue`);
+  const root = $('quiet-zone');
+  root.innerHTML = hidden
+    ? `<strong>${hidden} more unresolved item${hidden === 1 ? '' : 's'} are safely out of sight.</strong> ${quiet.join(' · ')}. Nothing is lost.`
+    : '<strong>There is no hidden pile right now.</strong> Everything unresolved fits on the desk.';
 }
 
-function deleteCard(cardId) {
-  board.cards = board.cards.filter(c => c.id !== cardId);
-  saveBoard();
-  renderBoard();
-}
+function renderInbox() {
+  if (!workspace) return;
+  const items = inboxItems(workspace);
+  $('inbox-count').textContent = items.length ? `${items.length} captured` : 'Inbox clear';
+  const stage = $('triage-stage');
+  stage.replaceChildren();
+  $('inbox-tail').textContent = '';
 
-function archiveCard(cardId) {
-  const idx = board.cards.findIndex(c => c.id === cardId);
-  if (idx === -1) return;
-  const card = board.cards.splice(idx, 1)[0];
-  archive.push(card);
-  saveArchive();
-  saveBoard();
-  renderBoard();
-}
-
-function duplicateCard(cardId) {
-  const orig = board.cards.find(c => c.id === cardId);
-  if (!orig) return;
-  const now = Date.now();
-  const colCards = getCardsForColumn(orig.columnId);
-  const copy = {
-    ...orig,
-    id: crypto.randomUUID(),
-    title: orig.title + ' (copy)',
-    order: colCards.length,
-    createdAt: now,
-    updatedAt: now
-  };
-  board.cards.push(copy);
-  saveBoard();
-  renderBoard();
-}
-
-function moveCardToColumn(cardId, colId) {
-  const card = board.cards.find(c => c.id === cardId);
-  if (!card) return;
-  card.columnId = colId;
-  card.updatedAt = Date.now();
-  const colCards = getCardsForColumn(colId).filter(c => c.id !== cardId);
-  card.order = colCards.length;
-  saveBoard();
-  renderBoard();
-}
-
-// ═══════════════════════════════════════════════════════════
-// CONTEXT MENU
-// ═══════════════════════════════════════════════════════════
-function showContextMenu(e, cardId) {
-  const menu = document.getElementById('context-menu');
-  const card = board.cards.find(c => c.id === cardId);
-  if (!card) return;
-
-  let html = '';
-
-  // Move to submenu
-  html += '<button class="ctx-item" style="font-weight:600;color:var(--text-muted);cursor:default;pointer-events:none;">Move to…</button>';
-  for (const col of board.columns.sort((a, b) => a.order - b.order)) {
-    if (col.id === card.columnId) continue;
-    html += '<button class="ctx-item ctx-submenu" data-action="move" data-col-id="' + col.id + '">' + escapeHtml(col.name) + '</button>';
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.innerHTML = '<strong>Inbox clear.</strong>Capture freely. You do not have to maintain emptiness as a streak.';
+    stage.appendChild(empty);
+    return;
   }
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item" data-action="duplicate">📋 Duplicate</button>';
-  html += '<button class="ctx-item" data-action="archive">📦 Archive</button>';
-  if (card.url) {
-    html += '<button class="ctx-item" data-action="copyurl">🔗 Copy URL</button>';
+
+  const item = items[0];
+  const card = document.createElement('div');
+  card.className = 'triage-card';
+  const eyebrow = document.createElement('div');
+  eyebrow.className = 'eyebrow';
+  eyebrow.textContent = `${kindLabel(item.kind)} · captured ${relativeTime(item.createdAt)}`;
+  const title = document.createElement('h2');
+  title.textContent = item.title;
+  const context = document.createElement('div');
+  context.className = 'triage-context';
+  context.textContent = item.notes || item.nextAction || 'No extra context. That is okay.';
+
+  const actions = document.createElement('div');
+  actions.className = 'triage-actions';
+  [
+    ['NOW', 'Now'],
+    ['QUEUE', 'Queue'],
+    ['WAITING', 'Waiting'],
+    ['LATER', 'Later'],
+    ['DONE', 'Done']
+  ].forEach(([state, label]) => {
+    const button = document.createElement('button');
+    button.className = state === 'NOW' ? 'btn btn-primary' : 'btn';
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      setItemState(workspace, item.id, state);
+      saveWorkspace();
+      renderAll();
+      if (state === 'WAITING') openInspector(item.id);
+    });
+    actions.appendChild(button);
+  });
+
+  const edit = document.createElement('button');
+  edit.className = 'btn btn-quiet btn-sm';
+  edit.textContent = 'Open details instead';
+  edit.addEventListener('click', () => openInspector(item.id));
+  const help = document.createElement('div');
+  help.className = 'triage-help';
+  help.append(edit);
+
+  card.append(eyebrow, title, context, actions, help);
+  stage.appendChild(card);
+  if (items.length > 1) $('inbox-tail').textContent = `${items.length - 1} more stay hidden until you decide this one.`;
+}
+
+function renderEverything() {
+  if (!workspace) return;
+  const filterRoot = $('state-filters');
+  filterRoot.replaceChildren();
+  ['ALL', ...STATES].forEach(state => {
+    const button = document.createElement('button');
+    button.className = `filter-chip${everythingState === state ? ' active' : ''}`;
+    button.textContent = state === 'ALL' ? 'All' : stateLabel(state);
+    button.addEventListener('click', () => { everythingState = state; renderEverything(); });
+    filterRoot.appendChild(button);
+  });
+
+  const query = $('everything-search')?.value || '';
+  const items = workspace.items
+    .filter(item => everythingState === 'ALL' || item.state === everythingState)
+    .filter(item => itemMatches(item, query))
+    .sort((a, b) => {
+      const doneWeight = (a.state === 'DONE') - (b.state === 'DONE');
+      return doneWeight || b.updatedAt - a.updatedAt;
+    });
+
+  const root = $('everything-list');
+  root.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.innerHTML = '<strong>No matches.</strong>Everything is still where you left it.';
+    root.appendChild(empty);
+    return;
   }
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item danger" data-action="delete">🗑 Delete</button>';
 
-  menu.innerHTML = html;
-  menu.classList.add('visible');
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'everything-row';
+    const state = document.createElement('span');
+    state.className = 'state-label';
+    state.textContent = item.state;
+    const copy = document.createElement('div');
+    copy.className = 'everything-copy';
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const subtitle = document.createElement('span');
+    subtitle.textContent = item.nextAction || item.notes || kindLabel(item.kind);
+    copy.append(title, subtitle);
+    const meta = document.createElement('span');
+    meta.className = 'everything-meta';
+    meta.textContent = [item.area, item.sourceLabel, relativeTime(item.updatedAt)].filter(Boolean).join(' · ');
+    row.append(state, copy, meta);
+    row.addEventListener('click', () => openInspector(item.id));
+    root.appendChild(row);
+  });
+}
 
-  // Position
-  const mx = e.clientX;
-  const my = e.clientY;
-  const mw = menu.offsetWidth;
-  const mh = menu.offsetHeight;
-  menu.style.left = (mx + mw > window.innerWidth ? mx - mw : mx) + 'px';
-  menu.style.top = (my + mh > window.innerHeight ? my - mh : my) + 'px';
+function renderSources() {
+  if (!workspace) return;
+  const groups = sourceGroups(workspace);
+  const root = $('sources-list');
+  root.replaceChildren();
+  if (!groups.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.innerHTML = '<strong>No sources connected yet.</strong>That is completely valid. Label an item with a source only when it helps. Later, integrations can feed this layer without taking over the Desk.';
+    root.appendChild(empty);
+    return;
+  }
 
-  // Bind actions
-  menu.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.action;
-      if (action === 'move') moveCardToColumn(cardId, btn.dataset.colId);
-      else if (action === 'duplicate') duplicateCard(cardId);
-      else if (action === 'archive') archiveCard(cardId);
-      else if (action === 'copyurl') { try { navigator.clipboard.writeText(card.url); } catch(e) {} }
-      else if (action === 'delete') { if (confirm('Delete "' + card.title + '"?')) deleteCard(cardId); }
-      hideContextMenu();
+  groups.forEach(group => {
+    const card = document.createElement('article');
+    card.className = 'source-card';
+    const head = document.createElement('div');
+    head.className = 'source-card-head';
+    const title = document.createElement('h3');
+    title.textContent = group.name;
+    const count = document.createElement('span');
+    count.className = 'source-count';
+    count.textContent = `${group.count} open`;
+    head.append(title, count);
+    const copy = document.createElement('p');
+    copy.textContent = group.needsAttention
+      ? `${group.needsAttention} item${group.needsAttention === 1 ? '' : 's'} currently deserve attention. The rest stay below the manager layer.`
+      : 'Nothing from this source needs to interrupt you right now.';
+    card.append(head, copy);
+    card.addEventListener('click', () => {
+      setView('everything');
+      $('everything-search').value = group.name;
+      renderEverything();
+    });
+    root.appendChild(card);
+  });
+}
+
+function captureQuick() {
+  if (!workspace) return;
+  const input = $('quick-input');
+  const raw = input.value.trim();
+  if (!raw) return;
+  const looksLikeUrl = /^https?:\/\//i.test(raw);
+  const kind = looksLikeUrl ? 'REFERENCE' : $('quick-kind').value;
+  captureItem(workspace, { title: raw, kind, sourceUrl: looksLikeUrl ? raw : '' });
+  input.value = '';
+  workspace.meta.lastCaptureKind = kind;
+  saveWorkspace();
+  renderAll();
+  toast('Captured. No organizing required.');
+}
+
+function populateInspectorSelects() {
+  const sets = [
+    ['item-state', STATES, stateLabel],
+    ['item-kind', KINDS, kindLabel],
+    ['item-effort', EFFORTS, value => value[0] + value.slice(1).toLowerCase()],
+    ['item-priority', PRIORITIES, value => value[0] + value.slice(1).toLowerCase()]
+  ];
+  sets.forEach(([id, values, formatter]) => {
+    const select = $(id);
+    if (!select || select.options.length) return;
+    values.forEach(value => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = formatter(value);
+      select.appendChild(option);
     });
   });
 }
 
-function hideContextMenu() {
-  const menu = document.getElementById('context-menu');
-  if (menu) menu.classList.remove('visible');
+function openInspector(itemId) {
+  const item = workspace?.items.find(candidate => candidate.id === itemId);
+  if (!item) return;
+  activeItemId = item.id;
+  populateInspectorSelects();
+  $('item-title').value = item.title;
+  $('item-next-action').value = item.nextAction;
+  $('item-state').value = item.state;
+  $('item-kind').value = item.kind;
+  $('item-effort').value = item.effort;
+  $('item-priority').value = item.priority;
+  $('item-due').value = item.dueAt ? String(item.dueAt).slice(0, 10) : '';
+  $('item-area').value = item.area;
+  $('item-waiting').value = item.waitingOn;
+  $('item-notes').value = item.notes;
+  $('item-source-label').value = item.sourceLabel;
+  $('item-source-url').value = item.sourceUrl;
+  $('item-tool').value = item.tool;
+  $('item-timestamps').textContent = `Created ${new Date(item.createdAt).toLocaleString()} · touched ${relativeTime(item.updatedAt)}`;
+  $('ai-item-output').classList.add('hidden');
+  $('ai-item-output').replaceChildren();
+  renderChecklist(item);
+  $('inspector-backdrop').classList.remove('hidden');
+  $('inspector').classList.remove('hidden');
+  setTimeout(() => $('item-next-action').focus(), 0);
 }
 
-// ═══════════════════════════════════════════════════════════
-// DETAIL MODAL
-// ═══════════════════════════════════════════════════════════
-function openModal(cardId) {
-  const card = board.cards.find(c => c.id === cardId);
-  if (!card) return;
-  activeModalCardId = cardId;
-  modalOpen = true;
-
-  document.getElementById('modal-title').value = card.title;
-  document.getElementById('modal-type').value = card.type;
-  document.getElementById('modal-priority').value = card.priority;
-  document.getElementById('modal-url').value = card.url || '';
-  document.getElementById('modal-notes').value = card.notes || '';
-  document.getElementById('modal-ai-model').value = card.aiModel || '';
-
-  // Initialize activeModalSubtasks
-  activeModalSubtasks = card.subtasks ? JSON.parse(JSON.stringify(card.subtasks)) : [];
-  renderChecklist(activeModalSubtasks);
-  document.getElementById('new-subtask-input').value = '';
-
-  // Populate column select
-  const colSelect = document.getElementById('modal-column');
-  colSelect.innerHTML = '';
-  for (const col of board.columns.sort((a, b) => a.order - b.order)) {
-    const opt = document.createElement('option');
-    opt.value = col.id;
-    opt.textContent = col.name;
-    if (col.id === card.columnId) opt.selected = true;
-    colSelect.appendChild(opt);
-  }
-
-  document.getElementById('modal-created').textContent = 'Created: ' + relativeTime(card.createdAt);
-  document.getElementById('modal-updated').textContent = 'Modified: ' + relativeTime(card.updatedAt);
-
-  document.getElementById('modal-overlay').classList.add('visible');
+function closeInspector() {
+  activeItemId = null;
+  $('inspector-backdrop').classList.add('hidden');
+  $('inspector').classList.add('hidden');
 }
 
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('visible');
-  activeModalCardId = null;
-  modalOpen = false;
+function syncInspectorField(field, value) {
+  const item = activeItem();
+  if (!item) return;
+  if (field === 'state') setItemState(workspace, item.id, value);
+  else item[field] = value;
+  item.updatedAt = Date.now();
+  saveWorkspace();
+  renderAll();
+  $('inspector-status').textContent = 'Saving…';
+  setTimeout(() => { if (activeItemId) $('inspector-status').textContent = 'Autosaved'; }, 650);
 }
 
-function saveModal() {
-  const card = board.cards.find(c => c.id === activeModalCardId);
-  if (!card) return;
-
-  card.title = document.getElementById('modal-title').value.trim() || card.title;
-  card.type = document.getElementById('modal-type').value;
-  card.priority = document.getElementById('modal-priority').value;
-  card.url = document.getElementById('modal-url').value.trim();
-  card.notes = document.getElementById('modal-notes').value;
-  card.aiModel = document.getElementById('modal-ai-model').value.trim();
-  card.subtasks = activeModalSubtasks; // Save subtasks
-
-  const newColId = document.getElementById('modal-column').value;
-  if (newColId !== card.columnId) {
-    card.columnId = newColId;
-    const colCards = getCardsForColumn(newColId).filter(c => c.id !== card.id);
-    card.order = colCards.length;
-  }
-
-  card.updatedAt = Date.now();
-  saveBoard();
-  renderBoard();
-  closeModal();
-}
-
-// ═══════════════════════════════════════════════════════════
-// COLUMN & ARCHIVE OPTIONS / HELPERS
-// ═══════════════════════════════════════════════════════════
-function renderChecklist(subtasks) {
-  const container = document.getElementById('modal-checklist');
-  container.innerHTML = '';
-  if (!subtasks || subtasks.length === 0) {
-    container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; font-style:italic; padding:4px 0;">No subtasks yet.</div>';
+function renderChecklist(item) {
+  const root = $('item-checklist');
+  root.replaceChildren();
+  if (!item.subtasks.length) {
+    const note = document.createElement('div');
+    note.className = 'field-note';
+    note.textContent = 'No steps. Add them only when breaking the thing down actually helps.';
+    root.appendChild(note);
     return;
   }
-  subtasks.forEach((sub, idx) => {
-    const item = document.createElement('div');
-    item.className = 'subtask-item';
-
+  item.subtasks.forEach(step => {
+    const row = document.createElement('div');
+    row.className = `check-item${step.done ? ' done' : ''}`;
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.className = 'subtask-checkbox';
-    checkbox.checked = sub.done;
+    checkbox.checked = step.done;
     checkbox.addEventListener('change', () => {
-      sub.done = checkbox.checked;
-      textSpan.className = checkbox.checked ? 'subtask-text completed' : 'subtask-text';
+      step.done = checkbox.checked;
+      item.updatedAt = Date.now();
+      saveWorkspace();
+      renderChecklist(item);
     });
-
-    const textSpan = document.createElement('span');
-    textSpan.className = sub.done ? 'subtask-text completed' : 'subtask-text';
-    textSpan.textContent = sub.text;
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn-icon';
-    delBtn.innerHTML = '✕';
-    delBtn.title = 'Remove subtask';
-    delBtn.style.padding = '2px 6px';
-    delBtn.addEventListener('click', () => {
-      subtasks.splice(idx, 1);
-      renderChecklist(subtasks);
+    const text = document.createElement('span');
+    text.textContent = step.text;
+    const remove = document.createElement('button');
+    remove.className = 'btn btn-quiet btn-sm';
+    remove.textContent = '✕';
+    remove.addEventListener('click', () => {
+      item.subtasks = item.subtasks.filter(candidate => candidate.id !== step.id);
+      item.updatedAt = Date.now();
+      saveWorkspace();
+      renderChecklist(item);
     });
-
-    item.appendChild(checkbox);
-    item.appendChild(textSpan);
-    item.appendChild(delBtn);
-    container.appendChild(item);
+    row.append(checkbox, text, remove);
+    root.appendChild(row);
   });
 }
 
-function showColumnContextMenu(e, colId) {
-  const menu = document.getElementById('context-menu');
-  const col = board.columns.find(c => c.id === colId);
-  if (!col) return;
-
-  let html = '';
-  
-  html += '<button class="ctx-item" data-action="rename">📝 Rename Column</button>';
-  html += '<div class="ctx-separator"></div>';
-  
-  const idx = board.columns.findIndex(c => c.id === colId);
-  const isFirst = idx === 0;
-  const isLast = idx === board.columns.length - 1;
-  
-  if (!isFirst) {
-    html += '<button class="ctx-item" data-action="move-left">◀ Move Left</button>';
-  }
-  if (!isLast) {
-    html += '<button class="ctx-item" data-action="move-right">▶ Move Right</button>';
-  }
-  
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item" style="font-weight:600;color:var(--text-muted);cursor:default;pointer-events:none;">Set Color Accent</button>';
-  
-  Object.keys(COLUMN_COLORS).forEach(cName => {
-    const colorInfo = COLUMN_COLORS[cName];
-    const dot = `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${colorInfo.hex}; margin-right:8px; vertical-align:middle;"></span>`;
-    const activeGlow = col.color === cName ? ' ✓' : '';
-    html += `<button class="ctx-item ctx-submenu" data-action="set-color" data-color="${cName}">${dot}${colorInfo.name}${activeGlow}</button>`;
-  });
-  
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item danger" data-action="delete-col">🗑 Delete Column</button>';
-
-  menu.innerHTML = html;
-  menu.classList.add('visible');
-
-  // Position
-  const mx = e.clientX;
-  const my = e.clientY;
-  const mw = menu.offsetWidth;
-  const mh = menu.offsetHeight;
-  menu.style.left = (mx + mw > window.innerWidth ? mx - mw : mx) + 'px';
-  menu.style.top = (my + mh > window.innerHeight ? my - mh : my) + 'px';
-
-  // Bind actions
-  menu.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.action;
-      if (action === 'rename') {
-        const colEl = document.querySelector(`.column[data-column-id="${colId}"]`);
-        const nameEl = colEl ? colEl.querySelector('.column-name') : null;
-        if (nameEl) {
-          nameEl.contentEditable = 'true';
-          nameEl.classList.add('editing');
-          nameEl.focus();
-          const range = document.createRange();
-          range.selectNodeContents(nameEl);
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
-      }
-      else if (action === 'move-left') moveColumn(colId, -1);
-      else if (action === 'move-right') moveColumn(colId, 1);
-      else if (action === 'set-color') setColumnColor(colId, btn.dataset.color);
-      else if (action === 'delete-col') deleteColumn(colId);
-      hideContextMenu();
-    });
-  });
-}
-
-function moveColumn(colId, direction) {
-  const idx = board.columns.findIndex(c => c.id === colId);
-  if (idx === -1) return;
-  const targetIdx = idx + direction;
-  if (targetIdx < 0 || targetIdx >= board.columns.length) return;
-  
-  const temp = board.columns[idx];
-  board.columns[idx] = board.columns[targetIdx];
-  board.columns[targetIdx] = temp;
-  
-  board.columns.forEach((c, i) => c.order = i);
-  
-  saveBoard();
-  renderBoard();
-}
-
-function setColumnColor(colId, colorName) {
-  const col = board.columns.find(c => c.id === colId);
-  if (!col) return;
-  col.color = colorName;
-  saveBoard();
-  renderBoard();
-}
-
-function deleteColumn(colId) {
-  const col = board.columns.find(c => c.id === colId);
-  if (!col) return;
-  
-  const colCards = getCardsForColumn(colId);
-  if (colCards.length > 0) {
-    const confirmMsg = `The column "${col.name}" contains ${colCards.length} card(s).\n\nAre you sure you want to delete this column and all its cards?`;
-    if (!confirm(confirmMsg)) return;
-    board.cards = board.cards.filter(c => c.columnId !== colId);
-  } else {
-    if (!confirm(`Delete empty column "${col.name}"?`)) return;
-  }
-  
-  board.columns = board.columns.filter(c => c.id !== colId);
-  board.columns.forEach((c, idx) => c.order = idx);
-  
-  saveBoard();
-  renderBoard();
-}
-
-function openArchiveModal() {
-  archiveModalOpen = true;
-  archiveSearchQuery = '';
-  document.getElementById('archive-search-input').value = '';
-  renderArchiveList();
-  document.getElementById('archive-overlay').style.display = 'flex';
-}
-
-function closeArchiveModal() {
-  document.getElementById('archive-overlay').style.display = 'none';
-  archiveModalOpen = false;
-}
-
-function renderArchiveList() {
-  const list = document.getElementById('archive-items-list');
-  if (!list) return;
-  list.innerHTML = '';
-  
-  const filtered = archive.filter(card => {
-    if (!archiveSearchQuery) return true;
-    const q = archiveSearchQuery.toLowerCase();
-    return card.title.toLowerCase().includes(q) || (card.notes || '').toLowerCase().includes(q);
-  });
-  
-  if (filtered.length === 0) {
-    list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:20px; font-style:italic;">No archived cards found.</div>';
-    return;
-  }
-  
-  filtered.forEach(card => {
-    const item = document.createElement('div');
-    item.className = 'archive-item';
-    
-    const icon = document.createElement('span');
-    icon.style.fontSize = '16px';
-    icon.textContent = TYPE_ICONS[card.type] || '📝';
-    
-    const content = document.createElement('div');
-    content.style.flex = '1';
-    content.style.display = 'flex';
-    content.style.flexDirection = 'column';
-    content.style.gap = '2px';
-    content.style.overflow = 'hidden';
-    
-    const title = document.createElement('div');
-    title.className = 'archive-item-title';
-    title.textContent = card.title;
-    
-    const meta = document.createElement('div');
-    meta.className = 'archive-item-meta';
-    meta.textContent = `Archived ${relativeTime(card.updatedAt || card.createdAt)}`;
-    
-    content.appendChild(title);
-    content.appendChild(meta);
-    
-    const restoreBtn = document.createElement('button');
-    restoreBtn.className = 'btn btn-ghost btn-sm';
-    restoreBtn.style.padding = '4px 8px';
-    restoreBtn.textContent = 'Restore';
-    restoreBtn.addEventListener('click', () => {
-      restoreCard(card.id);
-    });
-    
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn btn-ghost btn-sm';
-    deleteBtn.style.padding = '4px 8px';
-    deleteBtn.style.color = 'var(--priority-high)';
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', () => {
-      if (confirm(`Permanently delete "${card.title}"? This cannot be undone.`)) {
-        archive = archive.filter(c => c.id !== card.id);
-        saveArchive();
-        renderArchiveList();
-      }
-    });
-    
-    item.appendChild(icon);
-    item.appendChild(content);
-    item.appendChild(restoreBtn);
-    item.appendChild(deleteBtn);
-    
-    list.appendChild(item);
-  });
-}
-
-function restoreCard(cardId) {
-  const idx = archive.findIndex(c => c.id === cardId);
-  if (idx === -1) return;
-  const card = archive.splice(idx, 1)[0];
-  
-  let colExists = board.columns.some(c => c.id === card.columnId);
-  if (!colExists) {
-    card.columnId = board.columns[0]?.id || '';
-  }
-  
-  const colCards = getCardsForColumn(card.columnId);
-  card.order = colCards.length;
-  card.updatedAt = Date.now();
-  
-  board.cards.push(card);
-  saveBoard();
-  saveArchive();
-  renderBoard();
-  renderArchiveList();
-}
-
-// ═══════════════════════════════════════════════════════════
-// QUICK CAPTURE
-// ═══════════════════════════════════════════════════════════
-function handleQuickCapture() {
-  const input = document.getElementById('quick-input');
-  const typeSelect = document.getElementById('quick-type-select');
-  const title = input.value.trim();
-  if (!title) return;
-
-  let type = typeSelect.value;
-  if (isUrl(title)) type = 'URL';
-
-  createCard(title, type, board.columns[0].id);
+function addChecklistItem() {
+  const item = activeItem();
+  const input = $('check-input');
+  const text = input.value.trim();
+  if (!item || !text) return;
+  item.subtasks.push({ id: makeId(), text, done: false });
+  item.updatedAt = Date.now();
   input.value = '';
-  board.meta.lastType = type;
-  saveBoard();
+  saveWorkspace();
+  renderChecklist(item);
 }
 
-// ═══════════════════════════════════════════════════════════
-// TOOLBAR
-// ═══════════════════════════════════════════════════════════
-function initToolbar() {
-  // Search
-  document.getElementById('search-input').addEventListener('input', (e) => {
-    searchQuery = e.target.value;
-    renderBoard();
-  });
-
-  // Type filters
-  document.querySelectorAll('.type-filter').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.type-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      filterType = btn.dataset.type;
-      renderBoard();
-    });
-  });
-
-  // Priority filters
-  document.querySelectorAll('.priority-filter').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.priority-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      filterPriority = btn.dataset.priority;
-      renderBoard();
-    });
-  });
-
-  // Export
-  document.getElementById('export-btn').addEventListener('click', exportBoard);
-
-  // Import
-  document.getElementById('import-btn').addEventListener('click', () => {
-    document.getElementById('import-file').click();
-  });
-  document.getElementById('import-file').addEventListener('change', importBoard);
-
-  // Clear Done
-  document.getElementById('clear-done-btn').addEventListener('click', clearDone);
-}
-
-function exportBoard() {
-  const data = {
-    board: board,
-    settings: { baseUrl: settings.baseUrl, model: settings.model },
-    archive: archive,
-    exportedAt: new Date().toISOString()
-  };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'GeneralManager-backup.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-function importBoard(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(ev) {
-    try {
-      const data = JSON.parse(ev.target.result);
-      if (!data.board || !data.board.columns || !data.board.cards) {
-        alert('Invalid GeneralManager backup file.');
-        return;
-      }
-      const mode = confirm('Click OK to REPLACE your board, or Cancel to MERGE with existing data.');
-      if (mode) {
-        // Replace
-        board = data.board;
-        if (data.archive) archive = data.archive;
-      } else {
-        // Merge
-        const existingColNames = new Set(board.columns.map(c => c.name));
-        for (const col of data.board.columns) {
-          if (!existingColNames.has(col.name)) {
-            col.order = board.columns.length;
-            board.columns.push(col);
-            existingColNames.add(col.name);
-          }
-        }
-        const existingCardIds = new Set(board.cards.map(c => c.id));
-        for (const card of data.board.cards) {
-          if (!existingCardIds.has(card.id)) {
-            // Map to existing column by name
-            const srcCol = data.board.columns.find(c => c.id === card.columnId);
-            if (srcCol) {
-              const destCol = board.columns.find(c => c.name === srcCol.name);
-              if (destCol) card.columnId = destCol.id;
-              else card.columnId = board.columns[0].id;
-            }
-            board.cards.push(card);
-          }
-        }
-        if (data.archive) {
-          const existingArchiveIds = new Set(archive.map(c => c.id));
-          for (const ac of data.archive) {
-            if (!existingArchiveIds.has(ac.id)) archive.push(ac);
-          }
-        }
-      }
-      saveBoardImmediate();
-      saveArchiveImmediate();
-      renderBoard();
-      document.getElementById('board-title').value = board.meta.boardTitle;
-    } catch (err) {
-      alert('Failed to parse JSON: ' + err.message);
-    }
-  };
-  reader.readAsText(file);
-  e.target.value = '';
-}
-
-function clearDone() {
-  const doneCols = board.columns.filter(c => c.name.toUpperCase() === 'DONE');
-  let moved = 0;
-  for (const col of doneCols) {
-    const doneCards = board.cards.filter(c => c.columnId === col.id);
-    for (const card of doneCards) {
-      archive.push(card);
-      moved++;
-    }
-    board.cards = board.cards.filter(c => c.columnId !== col.id);
-  }
-  if (moved > 0) {
-    saveArchiveImmediate();
-    saveBoardImmediate();
-    renderBoard();
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// AI PANEL
-// ═══════════════════════════════════════════════════════════
-function initAIPanel() {
-  // Toggle
-  document.getElementById('ai-toggle-btn').addEventListener('click', toggleAIPanel);
-  document.getElementById('ai-close-btn').addEventListener('click', toggleAIPanel);
-
-  // Presets
-  document.querySelectorAll('.ai-preset').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.getElementById('ai-base-url').value = btn.dataset.url;
-      saveSettings();
-    });
-  });
-
-  // API key toggle
-  document.getElementById('api-key-toggle').addEventListener('click', () => {
-    const input = document.getElementById('ai-api-key');
-    input.type = input.type === 'password' ? 'text' : 'password';
-  });
-
-  // Save settings on change
-  ['ai-base-url', 'ai-api-key', 'ai-model'].forEach(id => {
-    document.getElementById(id).addEventListener('change', saveSettings);
-    document.getElementById(id).addEventListener('blur', saveSettings);
-  });
-
-  // Test connection
-  document.getElementById('ai-test-btn').addEventListener('click', testConnection);
-
-  // AI Actions
-  document.querySelectorAll('.ai-action-btn').forEach(btn => {
-    btn.addEventListener('click', () => handleAIAction(btn.dataset.action));
-  });
-
-  // Custom prompt
-  document.getElementById('ai-ask-btn').addEventListener('click', () => {
-    const text = document.getElementById('ai-custom-input').value.trim();
-    if (!text) return;
-    handleAIAction('custom', text);
-  });
-
-  // Load settings into fields
-  document.getElementById('ai-base-url').value = settings.baseUrl || '';
-  document.getElementById('ai-api-key').value = settings.apiKey || '';
-  document.getElementById('ai-model').value = settings.model || '';
-}
-
-function toggleAIPanel() {
-  document.getElementById('ai-panel').classList.toggle('visible');
-}
-
-function getBoardContext() {
-  const cols = board.columns.sort((a, b) => a.order - b.order);
-  const context = cols.map(col => ({
-    column: col.name,
-    cards: getCardsForColumn(col.id).map(c => ({
-      title: c.title,
-      type: c.type,
-      priority: c.priority,
-      url: c.url || undefined,
-      notes: c.notes ? c.notes.substring(0, 100) : undefined,
-      aiModel: c.aiModel || undefined
-    }))
-  }));
-  return JSON.stringify(context, null, 2);
-}
-
-const AI_PROMPTS = {
-  summarize: 'Summarize what this person is working on across all columns in 3-5 sentences.',
-  priority: 'Based on ACTIVE and BACKLOG cards, return the top 3 to focus on next. For each: card title + one sentence reason. Be direct.',
-  stalled: 'Identify ACTIVE cards with no notes and no URL. These are likely stalled. List them and suggest one unblocking action each.',
-  standup: 'Generate a standup: Yesterday (DONE cards), Today (ACTIVE), Blockers (PARKED). One tight paragraph.'
-};
-
-async function testConnection() {
-  saveSettings();
-  const status = document.getElementById('ai-status');
-  if (!settings.apiKey) {
-    status.className = 'ai-status visible error';
-    status.textContent = '❌ Configure API key first';
-    return;
-  }
-  status.className = 'ai-status visible';
-  status.style.background = 'var(--bg-input)';
-  status.style.color = 'var(--text-muted)';
-  status.textContent = '🔌 Testing…';
-
+async function copyText(text, message = 'Copied') {
   try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + settings.apiKey
-      },
-      body: JSON.stringify({
-        model: settings.model || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: 'Say "ok"' }],
-        max_tokens: 5
-      })
-    });
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+  toast(message);
+}
 
-    if (res.ok) {
-      const data = await res.json();
-      const model = data.model || settings.model || 'unknown';
-      status.className = 'ai-status visible success';
-      status.textContent = '✓ Connected — ' + model;
-    } else {
-      let errMsg = res.status + ': ';
-      try {
-        const errData = await res.json();
-        errMsg += errData.error?.message || res.statusText;
-      } catch (e) {
-        errMsg += res.statusText;
-      }
-      status.className = 'ai-status visible error';
-      status.textContent = '❌ ' + errMsg;
-    }
-  } catch (err) {
-    status.className = 'ai-status visible error';
-    status.textContent = '❌ Network error: ' + err.message;
+function openOverlay(id) {
+  $(id)?.classList.remove('hidden');
+  if (id === 'settings-overlay') renderSettings();
+  if (id === 'regroup-overlay') renderRegroup();
+}
+
+function closeOverlay(id) {
+  $(id)?.classList.add('hidden');
+  if (id === 'regroup-overlay' && workspace) {
+    workspace.meta.lastRegroupAt = Date.now();
+    saveWorkspace();
   }
 }
 
-async function handleAIAction(action, customText) {
-  saveSettings();
-  const responsePane = document.getElementById('ai-response');
-  responsePane.classList.add('visible');
-
-  if (!settings.apiKey) {
-    responsePane.innerHTML = '<span class="thinking">Configure API key in Settings first</span>';
-    return;
-  }
-
-  const prompt = action === 'custom' ? customText : AI_PROMPTS[action];
-  const boardContext = getBoardContext();
-
-  const messages = [
-    { role: 'system', content: 'You are an AI assistant helping a power user manage their tasks and context. Respond concisely and actionably.' },
-    { role: 'user', content: prompt + '\n\nBoard state:\n' + boardContext }
-  ];
-
-  responsePane.innerHTML = '<span class="thinking">Thinking…</span>';
-
-  try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + settings.apiKey
-      },
-      body: JSON.stringify({
-        model: settings.model || 'gpt-4o-mini',
-        messages: messages,
-        stream: true
-      })
-    });
-
-    if (!res.ok) {
-      let errMsg = '';
-      try {
-        const errData = await res.json();
-        errMsg = errData.error?.message || res.statusText;
-      } catch (e) {
-        errMsg = res.statusText;
-      }
-      responsePane.innerHTML = '<span style="color:var(--priority-high)">❌ ' + res.status + ': ' + escapeHtml(errMsg) + '</span>';
-      return;
-    }
-
-    const contentType = res.headers.get('content-type') || '';
-
-    if (contentType.includes('text/event-stream') || contentType.includes('application/x-ndjson') || contentType.includes('text/plain') || contentType.includes('application/octet-stream')) {
-      // Streaming SSE
-      responsePane.textContent = '';
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === 'data: [DONE]') continue;
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              const delta = json.choices?.[0]?.delta?.content;
-              if (delta) responsePane.textContent += delta;
-            } catch (e) { /* skip malformed chunk */ }
-          }
-        }
-        responsePane.scrollTop = responsePane.scrollHeight;
-      }
-      if (!responsePane.textContent) responsePane.textContent = '(No response content)';
-    } else {
-      // Non-streaming JSON fallback
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content || '(No response content)';
-      responsePane.textContent = content;
-    }
-  } catch (err) {
-    responsePane.innerHTML = '<span style="color:var(--priority-high)">❌ Error: ' + escapeHtml(err.message) + '</span>';
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// KEYBOARD SHORTCUTS
-// ═══════════════════════════════════════════════════════════
-function initKeyboard() {
-  document.addEventListener('keydown', (e) => {
-    // Close modal on Escape
-    if (e.key === 'Escape') {
-      if (modalOpen) { closeModal(); return; }
-      if (archiveModalOpen) { closeArchiveModal(); return; }
-      hideContextMenu();
-      return;
-    }
-
-    // Don't trigger shortcuts when typing in inputs
-    const tag = document.activeElement.tagName;
-    const isEditable = document.activeElement.contentEditable === 'true';
-    const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable;
-
-    if (e.key === '/' && !isInput && !modalOpen && !archiveModalOpen) {
-      e.preventDefault();
-      document.getElementById('quick-input').focus();
-      return;
-    }
-
-    if ((e.key === 'a' || e.key === 'A') && !isInput && !modalOpen && !archiveModalOpen && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      toggleAIPanel();
-      return;
-    }
-  });
-}
-
-// ═══════════════════════════════════════════════════════════
-// GLOBAL CLICK HANDLERS
-// ═══════════════════════════════════════════════════════════
-function initGlobalEvents() {
-  // Close context menu on click outside
-  document.addEventListener('click', (e) => {
-    const menu = document.getElementById('context-menu');
-    if (menu && menu.classList.contains('visible') && !menu.contains(e.target)) {
-      hideContextMenu();
-    }
-  });
-
-  // Close modal on overlay click
-  document.getElementById('modal-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('modal-overlay')) closeModal();
-  });
-
-  // Modal buttons
-  document.getElementById('modal-close').addEventListener('click', closeModal);
-  document.getElementById('modal-save-btn').addEventListener('click', saveModal);
-  document.getElementById('modal-delete-btn').addEventListener('click', () => {
-    if (activeModalCardId && confirm('Delete this card?')) {
-      deleteCard(activeModalCardId);
-      closeModal();
-    }
-  });
-  document.getElementById('modal-archive-btn').addEventListener('click', () => {
-    if (activeModalCardId) {
-      archiveCard(activeModalCardId);
-      closeModal();
-    }
-  });
-
-  // Checklist: add subtask button
-  document.getElementById('add-subtask-btn').addEventListener('click', () => {
-    const input = document.getElementById('new-subtask-input');
-    const text = input.value.trim();
-    if (!text) return;
-    activeModalSubtasks.push({
-      id: crypto.randomUUID(),
-      text: text,
-      done: false
-    });
-    input.value = '';
-    renderChecklist(activeModalSubtasks);
-  });
-  document.getElementById('new-subtask-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      document.getElementById('add-subtask-btn').click();
-    }
-  });
-
-  // Archive view modal toggles & controls
-  document.getElementById('archive-view-btn').addEventListener('click', openArchiveModal);
-  document.getElementById('archive-close').addEventListener('click', closeArchiveModal);
-  document.getElementById('archive-modal-close-btn').addEventListener('click', closeArchiveModal);
-  document.getElementById('archive-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('archive-overlay')) closeArchiveModal();
-  });
-  document.getElementById('archive-search-input').addEventListener('input', (e) => {
-    archiveSearchQuery = e.target.value;
-    renderArchiveList();
-  });
-  document.getElementById('archive-empty-btn').addEventListener('click', () => {
-    if (archive.length > 0 && confirm('Permanently delete all archived cards? This cannot be undone.')) {
-      archive = [];
-      saveArchiveImmediate();
-      renderArchiveList();
-    }
-  });
-
-  // Quick Capture
-  document.getElementById('quick-add-btn').addEventListener('click', handleQuickCapture);
-  document.getElementById('quick-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleQuickCapture();
-    }
-  });
-
-  // URL auto-detect in quick input
-  document.getElementById('quick-input').addEventListener('input', (e) => {
-    const val = e.target.value.trim();
-    if (isUrl(val)) {
-      document.getElementById('quick-type-select').value = 'URL';
-    }
-  });
-
-  // Board title save on blur
-  document.getElementById('board-title').addEventListener('blur', saveBoard);
-  document.getElementById('board-title').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-  });
-
-  // Logout button
-  document.getElementById('logout-btn').addEventListener('click', () => {
-    if (confirm('Sign out of your account?')) {
-      signOutUser();
-    }
-  });
-}
-
-// ═══════════════════════════════════════════════════════════
-// INITIALIZATION AND LIFECYCLE
-// ═══════════════════════════════════════════════════════════
-function initAppUI() {
-  document.getElementById('board-title').value = board.meta.boardTitle || 'GeneralManager';
-
-  // Set last-used type
-  if (board.meta.lastType) {
-    document.getElementById('quick-type-select').value = board.meta.lastType;
-  }
-
-  renderBoard();
-
-  if (!listenersInitialized) {
-    initToolbar();
-    initAIPanel();
-    initKeyboard();
-    initGlobalEvents();
-    listenersInitialized = true;
-  }
-}
-
-// Wire up auth state change to app state mapping
-onUserChanged(async (user) => {
-  currentUser = user;
-  if (user) {
-    // Show email and logout button
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) {
-      emailEl.textContent = user.email;
-      emailEl.title = user.email;
-    }
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) {
-      profileEl.style.display = 'flex';
-    }
-
-    // Load settings from localStorage (remains local)
-    loadSettings();
-
-    try {
-      const data = await loadUserData(user.uid);
-      if (data.board) {
-        board = data.board;
-        archive = data.archive || [];
-      } else {
-        // No board in Firestore. Check for migration
-        if (hasLocalStorageData()) {
-          showMigrationBanner(user.uid, (migratedBoard, migratedArchive) => {
-            board = migratedBoard;
-            archive = migratedArchive;
-            initAppUI();
-          }, () => {
-            // Dismissed / skip migration
-            board = createDefaultBoard();
-            archive = [];
-            saveBoardImmediate();
-            saveArchiveImmediate();
-            initAppUI();
-          });
-          return; // Wait for banner interaction
-        } else {
-          // Fresh board
-          board = createDefaultBoard();
-          archive = [];
-          await Promise.all([
-            saveUserBoardImmediate(user.uid, board),
-            saveUserArchiveImmediate(user.uid, archive)
-          ]);
-        }
-      }
-      initAppUI();
-    } catch (err) {
-      console.error("Error loading user workspace:", err);
-      // Fallback
-      board = createDefaultBoard();
-      archive = [];
-      initAppUI();
-    }
+function renderRegroup() {
+  const entries = regroupCandidates(workspace);
+  const root = $('regroup-list');
+  root.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.style.margin = '0 20px 18px';
+    empty.innerHTML = '<strong>Nothing needs a regroup.</strong>You can close this and keep going.';
+    root.appendChild(empty);
   } else {
-    // Logged out
-    board = null;
-    archive = [];
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) emailEl.textContent = '';
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) profileEl.style.display = 'none';
-    const container = document.getElementById('board-container');
-    if (container) container.innerHTML = '';
+    entries.forEach(entry => {
+      const row = document.createElement('div');
+      row.className = 'regroup-item';
+      const reason = document.createElement('span');
+      reason.className = 'regroup-reason';
+      reason.textContent = entry.reason;
+      const copy = document.createElement('div');
+      copy.className = 'regroup-copy';
+      const title = document.createElement('strong');
+      title.textContent = entry.item.title;
+      const next = document.createElement('span');
+      next.textContent = entry.item.nextAction || `Currently ${stateLabel(entry.item.state)}`;
+      copy.append(title, next);
+      const actions = document.createElement('div');
+      actions.className = 'regroup-actions';
+      [['NOW', 'Now'], ['QUEUE', 'Queue'], ['LATER', 'Later'], ['DONE', 'Done']].forEach(([state, label]) => {
+        const button = document.createElement('button');
+        button.className = `btn btn-sm${state === 'NOW' ? ' btn-primary' : ''}`;
+        button.textContent = label;
+        button.addEventListener('click', () => {
+          setItemState(workspace, entry.item.id, state);
+          saveWorkspace();
+          renderAll();
+          renderRegroup();
+        });
+        actions.appendChild(button);
+      });
+      row.append(reason, copy, actions);
+      root.appendChild(row);
+    });
+  }
+  const stats = briefStats(workspace);
+  $('regroup-footer-copy').textContent = `${entries.length} decision${entries.length === 1 ? '' : 's'} surfaced. ${stats.hiddenFromDesk} other unresolved items stay safely out of sight.`;
+}
+
+function renderSettings() {
+  settings = loadSettings();
+  $('ai-base-url').value = settings.baseUrl || '';
+  $('ai-model').value = settings.model || '';
+  $('ai-api-key').value = settings.apiKey || '';
+  $('ai-status').textContent = '';
+}
+
+async function callAI(messages, maxTokens = 700) {
+  persistSettings();
+  if (!settings.apiKey || !settings.baseUrl || !settings.model) throw new Error('Configure an endpoint, key and model in Settings first.');
+  const endpoint = `${settings.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey}` },
+    body: JSON.stringify({ model: settings.model, messages, temperature: 0.2, max_tokens: maxTokens })
+  });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).error?.message || detail; } catch { /* noop */ }
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  const payload = await response.json();
+  return payload.choices?.[0]?.message?.content?.trim() || '';
+}
+
+function aiContext(item) {
+  return {
+    title: item.title,
+    state: item.state,
+    nextAction: item.nextAction,
+    area: item.area,
+    waitingOn: item.waitingOn,
+    dueAt: item.dueAt,
+    notes: item.notes,
+    source: item.sourceLabel,
+    sourceUrl: item.sourceUrl,
+    tool: item.tool,
+    steps: item.subtasks
+  };
+}
+
+function renderAIOutput(text, action) {
+  const root = $('ai-item-output');
+  root.classList.remove('hidden');
+  root.replaceChildren();
+  const copy = document.createElement('div');
+  copy.textContent = text;
+  root.appendChild(copy);
+  const actions = document.createElement('div');
+  actions.className = 'card-actions';
+  const copyButton = document.createElement('button');
+  copyButton.className = 'btn btn-sm';
+  copyButton.textContent = 'Copy';
+  copyButton.addEventListener('click', () => copyText(text));
+  actions.appendChild(copyButton);
+  if (action === 'smaller') {
+    const apply = document.createElement('button');
+    apply.className = 'btn btn-primary btn-sm';
+    apply.textContent = 'Use as next move';
+    apply.addEventListener('click', () => {
+      const item = activeItem();
+      if (!item) return;
+      item.nextAction = text.replace(/^[-–—•\s]+/, '').trim();
+      item.updatedAt = Date.now();
+      saveWorkspace();
+      openInspector(item.id);
+      renderAll();
+    });
+    actions.appendChild(apply);
+  }
+  if (action === 'clean') {
+    const apply = document.createElement('button');
+    apply.className = 'btn btn-primary btn-sm';
+    apply.textContent = 'Replace context';
+    apply.addEventListener('click', () => {
+      const item = activeItem();
+      if (!item) return;
+      item.notes = text;
+      item.updatedAt = Date.now();
+      saveWorkspace();
+      openInspector(item.id);
+      renderAll();
+    });
+    actions.appendChild(apply);
+  }
+  root.appendChild(actions);
+}
+
+async function runItemAI(action) {
+  const item = activeItem();
+  if (!item) return;
+  const root = $('ai-item-output');
+  root.classList.remove('hidden');
+  root.textContent = 'Thinking…';
+  const context = JSON.stringify(aiContext(item), null, 2);
+  const prompts = {
+    smaller: 'Turn this into the smallest genuinely useful next physical action. One short line only. Do not invent facts or add motivational language.',
+    resume: 'Create a compact re-entry brief using exactly: WHERE IT STANDS, NEXT MOVE, WATCH OUT. Do not invent anything not in the item.',
+    clean: 'Rewrite the context into compact future-you notes. Preserve every concrete fact, constraint and open question. Remove repetition. No commentary.',
+    handoff: 'Create a strong handoff for another capable person or AI agent. Include goal, current state, known context, next move, constraints and open questions. Never invent facts.'
+  };
+  try {
+    const text = await callAI([
+      { role: 'system', content: prompts[action] },
+      { role: 'user', content: context }
+    ], action === 'smaller' ? 180 : action === 'resume' ? 450 : 850);
+    renderAIOutput(text, action);
+  } catch (error) {
+    root.textContent = `AI unavailable: ${error.message}`;
+  }
+}
+
+function openCommand() {
+  $('command-overlay').classList.remove('hidden');
+  $('command-input').value = '';
+  commandIndex = 0;
+  renderCommandResults();
+  setTimeout(() => $('command-input').focus(), 0);
+}
+
+function closeCommand() {
+  $('command-overlay').classList.add('hidden');
+}
+
+function renderCommandResults() {
+  const query = $('command-input').value.trim().toLowerCase();
+  const actions = [
+    { label: 'Go to Desk', meta: 'view', run: () => setView('desk') },
+    { label: 'Open Inbox', meta: 'view', run: () => setView('inbox') },
+    { label: 'Regroup', meta: 're-entry', run: () => openOverlay('regroup-overlay') },
+    { label: 'Capture something', meta: 'action', run: () => { setView('desk'); setTimeout(() => $('quick-input').focus(), 0); } }
+  ];
+  const matchingActions = actions.filter(entry => !query || entry.label.toLowerCase().includes(query));
+  const matchingItems = workspace.items
+    .filter(item => !query || itemMatches(item, query))
+    .filter(item => item.state !== 'DONE' || query)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 12)
+    .map(item => ({ label: item.title, meta: `${stateLabel(item.state)} · ${item.area || kindLabel(item.kind)}`, run: () => openInspector(item.id) }));
+  commandEntries = [...matchingActions, ...matchingItems];
+  if (commandIndex >= commandEntries.length) commandIndex = Math.max(0, commandEntries.length - 1);
+  const root = $('command-results');
+  root.replaceChildren();
+  if (!commandEntries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'field-note';
+    empty.style.padding = '14px';
+    empty.textContent = 'No matches.';
+    root.appendChild(empty);
+    return;
+  }
+  commandEntries.forEach((entry, index) => {
+    const row = document.createElement('div');
+    row.className = `command-item${index === commandIndex ? ' active' : ''}`;
+    const label = document.createElement('strong');
+    label.textContent = entry.label;
+    const meta = document.createElement('span');
+    meta.textContent = entry.meta;
+    row.append(label, meta);
+    row.addEventListener('click', () => { closeCommand(); entry.run(); });
+    root.appendChild(row);
+  });
+}
+
+function exportData() {
+  const safeSettings = { baseUrl: settings.baseUrl, model: settings.model };
+  const payload = { exportedAt: new Date().toISOString(), workspace, settings: safeSettings };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `general-manager-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importData(file) {
+  const text = await file.text();
+  const payload = JSON.parse(text);
+  const incoming = normalizeWorkspace(payload.workspace || payload);
+  const replace = confirm('Replace the current harness with this import? Press Cancel to merge instead.');
+  if (replace) {
+    workspace = incoming;
+  } else {
+    const existing = new Set(workspace.items.map(item => item.id));
+    incoming.items.forEach(item => workspace.items.push(existing.has(item.id) ? normalizeItem({ ...item, id: makeId() }) : item));
+  }
+  await saveUserHarnessImmediate(currentUser.uid, workspace);
+  renderAll();
+  setView(workspace.meta.preferredView || 'desk', false);
+  toast(replace ? 'Import replaced workspace' : 'Import merged');
+}
+
+function attachListeners() {
+  if (listenersReady) return;
+  listenersReady = true;
+
+  $$('.nav-tab').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
+  $('quick-add-btn').addEventListener('click', captureQuick);
+  $('quick-input').addEventListener('keydown', event => { if (event.key === 'Enter') captureQuick(); });
+  $('quick-kind').addEventListener('change', event => { if (workspace) workspace.meta.lastCaptureKind = event.target.value; });
+
+  $$('#capacity-switch button').forEach(button => button.addEventListener('click', () => {
+    if (!workspace) return;
+    workspace.meta.capacityMode = button.dataset.capacity;
+    saveWorkspace();
+    renderAll();
+  }));
+
+  $('regroup-btn').addEventListener('click', () => openOverlay('regroup-overlay'));
+  $('attention-regroup-btn').addEventListener('click', () => openOverlay('regroup-overlay'));
+  $('search-btn').addEventListener('click', openCommand);
+  $('settings-btn').addEventListener('click', () => openOverlay('settings-overlay'));
+  $('inspector-close').addEventListener('click', closeInspector);
+  $('inspector-backdrop').addEventListener('click', closeInspector);
+  $('copy-handoff-btn').addEventListener('click', () => { const item = activeItem(); if (item) copyText(itemToHandoff(item), 'Handoff copied'); });
+
+  const fields = [
+    ['item-title', 'title'], ['item-next-action', 'nextAction'], ['item-state', 'state'], ['item-kind', 'kind'],
+    ['item-effort', 'effort'], ['item-priority', 'priority'], ['item-due', 'dueAt'], ['item-area', 'area'],
+    ['item-waiting', 'waitingOn'], ['item-notes', 'notes'], ['item-source-label', 'sourceLabel'],
+    ['item-source-url', 'sourceUrl'], ['item-tool', 'tool']
+  ];
+  fields.forEach(([id, field]) => {
+    const node = $(id);
+    const eventName = node.tagName === 'SELECT' || node.type === 'date' ? 'change' : 'input';
+    node.addEventListener(eventName, event => syncInspectorField(field, event.target.value));
+  });
+
+  $('check-add-btn').addEventListener('click', addChecklistItem);
+  $('check-input').addEventListener('keydown', event => { if (event.key === 'Enter') addChecklistItem(); });
+  $('duplicate-item-btn').addEventListener('click', () => {
+    const item = activeItem();
+    if (!item) return;
+    const copy = duplicateItem(workspace, item.id);
+    saveWorkspace();
+    renderAll();
+    openInspector(copy.id);
+  });
+  $('snooze-item-btn').addEventListener('click', () => {
+    const item = activeItem();
+    if (!item) return;
+    item.snoozedUntil = new Date(Date.now() + DAY).toISOString();
+    item.updatedAt = Date.now();
+    saveWorkspace();
+    renderAll();
+    closeInspector();
+    toast('Out of sight until tomorrow.');
+  });
+  $('complete-item-btn').addEventListener('click', () => {
+    const item = activeItem();
+    if (!item) return;
+    setItemState(workspace, item.id, 'DONE');
+    saveWorkspace();
+    renderAll();
+    closeInspector();
+    toast('Done.');
+  });
+  $('delete-item-btn').addEventListener('click', () => {
+    const item = activeItem();
+    if (!item || !confirm(`Delete “${item.title}” permanently?`)) return;
+    workspace.items = workspace.items.filter(candidate => candidate.id !== item.id);
+    saveWorkspace();
+    renderAll();
+    closeInspector();
+  });
+
+  $$('[data-ai-action]').forEach(button => button.addEventListener('click', () => runItemAI(button.dataset.aiAction)));
+  $$('[data-close-overlay]').forEach(button => button.addEventListener('click', () => closeOverlay(button.dataset.closeOverlay)));
+  $$('[data-ai-preset]').forEach(button => button.addEventListener('click', () => { $('ai-base-url').value = button.dataset.aiPreset; persistSettings(); }));
+  ['ai-base-url', 'ai-model', 'ai-api-key'].forEach(id => $(id).addEventListener('input', persistSettings));
+  $('ai-test-btn').addEventListener('click', async () => {
+    const status = $('ai-status');
+    status.textContent = 'Testing…';
+    try {
+      await callAI([{ role: 'user', content: 'Reply with exactly OK' }], 12);
+      status.textContent = 'Connected.';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  $('export-btn').addEventListener('click', exportData);
+  $('import-btn').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try { await importData(file); }
+    catch (error) { alert(`Import failed: ${error.message}`); }
+    event.target.value = '';
+  });
+
+  $('everything-search').addEventListener('input', renderEverything);
+  $('command-input').addEventListener('input', () => { commandIndex = 0; renderCommandResults(); });
+  $('command-input').addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); commandIndex = Math.min(commandIndex + 1, commandEntries.length - 1); renderCommandResults(); }
+    if (event.key === 'ArrowUp') { event.preventDefault(); commandIndex = Math.max(commandIndex - 1, 0); renderCommandResults(); }
+    if (event.key === 'Enter' && commandEntries[commandIndex]) { event.preventDefault(); const entry = commandEntries[commandIndex]; closeCommand(); entry.run(); }
+    if (event.key === 'Escape') closeCommand();
+  });
+  $('command-overlay').addEventListener('click', event => { if (event.target === $('command-overlay')) closeCommand(); });
+
+  $('board-title').addEventListener('input', () => saveWorkspace());
+  $('logout-btn').addEventListener('click', () => window.signOutUser?.());
+
+  document.addEventListener('keydown', event => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      if (!$('command-overlay').classList.contains('hidden')) closeCommand(); else openCommand();
+      return;
+    }
+    if (event.key === '/' && !isTypingTarget(event.target)) {
+      event.preventDefault();
+      setView('desk');
+      $('quick-input').focus();
+      return;
+    }
+    if (event.key === 'Escape') {
+      if (!$('command-overlay').classList.contains('hidden')) closeCommand();
+      else if (!$('regroup-overlay').classList.contains('hidden')) closeOverlay('regroup-overlay');
+      else if (!$('settings-overlay').classList.contains('hidden')) closeOverlay('settings-overlay');
+      else if (!$('inspector').classList.contains('hidden')) closeInspector();
+    }
+  });
+}
+
+async function bootstrapForUser(user) {
+  currentUser = user;
+  $('user-email').textContent = user.email || '';
+  let stored = await loadUserHarness(user.uid);
+  if (!stored) {
+    const legacy = await window.loadUserData?.(user.uid).catch(() => ({ board: null, archive: [] }));
+    workspace = normalizeWorkspace(legacy?.board || createDefaultWorkspace());
+    workspace.meta.seededFromLegacy = !!legacy?.board;
+    workspace.meta.seededAt = Date.now();
+    await saveUserHarnessImmediate(user.uid, workspace);
+  } else {
+    workspace = normalizeWorkspace(stored);
+  }
+  const previousOpen = workspace.meta.lastOpenedAt;
+  workspace.meta.lastOpenedAt = Date.now();
+  $('quick-kind').value = workspace.meta.lastCaptureKind || 'TASK';
+  renderAll();
+  setView(workspace.meta.preferredView || 'desk', false);
+  saveWorkspace();
+
+  if (previousOpen && Date.now() - previousOpen > 36 * 60 * 60 * 1000 && regroupCandidates(workspace).length) {
+    setTimeout(() => openOverlay('regroup-overlay'), 350);
+  }
+}
+
+attachListeners();
+
+window.onUserChanged?.(async user => {
+  if (!user) {
+    currentUser = null;
+    workspace = null;
+    activeItemId = null;
+    return;
+  }
+  try {
+    await bootstrapForUser(user);
+  } catch (error) {
+    console.error('Failed to bootstrap General Manager harness:', error);
+    toast('Could not load the manager workspace.');
   }
 });
