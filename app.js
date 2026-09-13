@@ -1,1534 +1,1286 @@
-// app.js
+import {
+  TYPES,
+  PRIORITIES,
+  TYPE_ICONS,
+  createDefaultBoard,
+  normalizeBoard,
+  normalizeCard,
+  preferredCaptureColumn,
+  sortedColumns,
+  cardsForColumn,
+  findColumnByName,
+  createCard,
+  moveCard,
+  duplicateCard,
+  archiveCard as archiveCardCore,
+  cardMatches,
+  staleInfo,
+  focusColumns,
+  isLegacyDefaultBoard,
+  upgradeLegacyDefaultBoard,
+  relativeTime,
+  cardToHandoff,
+  makeId
+} from './core.js';
 
-const TYPES = ['AGENT', 'RESEARCH', 'REPO', 'URL', 'NOTE', 'IDEA'];
-const TYPE_ICONS = { AGENT: '🤖', RESEARCH: '🔬', REPO: '📦', URL: '🔗', NOTE: '📝', IDEA: '💡' };
-const PRIORITIES = ['HIGH', 'MED', 'LOW'];
-const MAX_COLUMNS = 8;
 const LS_SETTINGS = 'gm_settings';
+const COLUMN_ACCENTS = ['#38bdf8', '#34d399', '#8b5cf6', '#fbbf24', '#94a3b8', '#f472b6', '#fb923c'];
 
-// Column Color Presets
-const COLUMN_COLORS = {
-  PURPLE: { hex: '#7c3aed', bg: 'rgba(124, 58, 237, 0.15)', name: 'Purple' },
-  BLUE: { hex: '#0ea5e9', bg: 'rgba(14, 165, 233, 0.15)', name: 'Blue' },
-  GREEN: { hex: '#10b981', bg: 'rgba(16, 185, 129, 0.15)', name: 'Green' },
-  YELLOW: { hex: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)', name: 'Yellow' },
-  PINK: { hex: '#ec4899', bg: 'rgba(236, 72, 153, 0.15)', name: 'Pink' },
-  GRAY: { hex: '#6b7280', bg: 'rgba(107, 114, 128, 0.15)', name: 'Gray' }
-};
-const DEFAULT_INDEX_COLORS = ['PURPLE', 'GREEN', 'YELLOW', 'GRAY'];
-
-// STATE
 let board = null;
-let settings = null;
 let archive = [];
+let currentUser = null;
+let activeCardId = null;
+let draggedCardId = null;
+let searchQuery = '';
 let filterType = 'ALL';
 let filterPriority = 'ALL';
-let searchQuery = '';
-let draggedCardId = null;
-let activeModalCardId = null;
-let modalOpen = false;
-let activeModalSubtasks = [];
-let archiveSearchQuery = '';
-let archiveModalOpen = false;
+let commandIndex = 0;
+let commandItems = [];
+let settings = loadSettings();
+let listenersReady = false;
 
-let currentUser = null;
-let listenersInitialized = false;
+const $ = (id) => document.getElementById(id);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-// ═══════════════════════════════════════════════════════════
-// PERSISTENCE (Firestore adaptors)
-// ═══════════════════════════════════════════════════════════
-function saveBoard() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoard(currentUser.uid, board);
-    }
-  }
+function isUrl(value) {
+  return /^https?:\/\//i.test(String(value || '').trim());
 }
 
-function saveBoardImmediate() {
-  if (board) {
-    board.meta.boardTitle = document.getElementById('board-title').value || 'GeneralManager';
-    if (currentUser) {
-      saveUserBoardImmediate(currentUser.uid, board);
-    }
-  }
+function toast(message) {
+  const region = $('toast-region');
+  if (!region) return;
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = message;
+  region.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
 }
 
 function loadSettings() {
   try {
-    const raw = localStorage.getItem(LS_SETTINGS);
-    if (raw) { settings = JSON.parse(raw); return; }
-  } catch (e) { /* reset */ }
-  settings = { baseUrl: '', apiKey: '', model: '' };
+    return { baseUrl: '', apiKey: '', model: '', ...JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}') };
+  } catch {
+    return { baseUrl: '', apiKey: '', model: '' };
+  }
 }
 
-function saveSettings() {
-  settings.baseUrl = document.getElementById('ai-base-url').value;
-  settings.apiKey = document.getElementById('ai-api-key').value;
-  settings.model = document.getElementById('ai-model').value;
+function persistSettings() {
+  settings = {
+    baseUrl: $('ai-base-url')?.value.trim() || '',
+    apiKey: $('ai-api-key')?.value.trim() || '',
+    model: $('ai-model')?.value.trim() || ''
+  };
   localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
 }
 
-function saveArchive() {
-  if (currentUser) {
-    saveUserArchive(currentUser.uid, archive);
-  }
+function saveBoard(immediate = false) {
+  if (!board || !currentUser) return;
+  board.meta.boardTitle = $('board-title')?.value.trim() || board.meta.boardTitle || 'GeneralManager';
+  const fn = immediate ? window.saveUserBoardImmediate : window.saveUserBoard;
+  if (typeof fn === 'function') fn(currentUser.uid, board);
 }
 
-function saveArchiveImmediate() {
-  if (currentUser) {
-    saveUserArchiveImmediate(currentUser.uid, archive);
-  }
+function saveArchive(immediate = false) {
+  if (!currentUser) return;
+  const fn = immediate ? window.saveUserArchiveImmediate : window.saveUserArchive;
+  if (typeof fn === 'function') fn(currentUser.uid, archive);
 }
 
-// ═══════════════════════════════════════════════════════════
-// DEFAULT BOARD
-// ═══════════════════════════════════════════════════════════
-function createDefaultBoard() {
-  const cols = [
-    { id: crypto.randomUUID(), name: 'BACKLOG', order: 0 },
-    { id: crypto.randomUUID(), name: 'ACTIVE', order: 1 },
-    { id: crypto.randomUUID(), name: 'PARKED', order: 2 },
-    { id: crypto.randomUUID(), name: 'DONE', order: 3 }
-  ];
-  const now = Date.now();
-  const cards = [
-    {
-      id: crypto.randomUUID(), columnId: cols[0].id, type: 'AGENT', title: 'Set up Codex agent for repo analysis',
-      url: '', notes: 'Need to configure the agent with proper context window settings and tool access.', priority: 'MED',
-      aiModel: 'gpt-4o', order: 0, createdAt: now - 7200000, updatedAt: now - 3600000
-    },
-    {
-      id: crypto.randomUUID(), columnId: cols[1].id, type: 'RESEARCH', title: 'Deep dive: transformer attention patterns',
-      url: 'https://arxiv.org/abs/2401.00001', notes: '', priority: 'HIGH',
-      aiModel: 'gemini-2.5-pro', order: 0, createdAt: now - 86400000, updatedAt: now - 43200000
-    },
-    {
-      id: crypto.randomUUID(), columnId: cols[2].id, type: 'IDEA', title: 'Build a context-switching dashboard',
-      url: '', notes: 'Prototype idea: visualize all active AI sessions with their token usage and last activity.', priority: 'LOW',
-      aiModel: '', order: 0, createdAt: now - 172800000, updatedAt: now - 86400000
-    }
-  ];
-  return { columns: cols, cards: cards, meta: { boardTitle: 'GeneralManager', lastType: 'NOTE' } };
+function setView(view, persist = true) {
+  if (!board) return;
+  const next = view === 'board' ? 'board' : 'focus';
+  board.meta.preferredView = next;
+  $('focus-view').classList.toggle('hidden', next !== 'focus');
+  $('board-view').classList.toggle('hidden', next !== 'board');
+  $$('.view-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.view === next));
+  if (persist) saveBoard();
 }
 
-// ═══════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════
-function relativeTime(ts) {
-  const diff = Date.now() - ts;
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return min + 'm ago';
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return hr + 'h ago';
-  const days = Math.floor(hr / 24);
-  if (days < 30) return days + 'd ago';
-  const months = Math.floor(days / 30);
-  return months + 'mo ago';
+function populateDestinationSelects() {
+  if (!board) return;
+  const columns = sortedColumns(board);
+  const capture = $('quick-destination');
+  const inspector = $('card-column');
+  const remembered = preferredCaptureColumn(board);
+  const active = activeCardId ? board.cards.find(card => card.id === activeCardId) : null;
+
+  [capture, inspector].forEach(select => {
+    if (!select) return;
+    const wanted = select === capture ? remembered?.id : active?.columnId;
+    select.replaceChildren(...columns.map(col => {
+      const option = document.createElement('option');
+      option.value = col.id;
+      option.textContent = col.name;
+      if (col.id === wanted) option.selected = true;
+      return option;
+    }));
+  });
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+function makeBadge(text, type = '') {
+  const span = document.createElement('span');
+  span.className = 'badge';
+  if (type) span.dataset.type = type;
+  span.textContent = text;
+  return span;
 }
 
-function isUrl(str) {
-  return /^https?:\/\//i.test(str.trim());
-}
-
-function getCardsForColumn(colId) {
-  if (!board || !board.cards) return [];
-  return board.cards
-    .filter(c => c.columnId === colId)
-    .sort((a, b) => a.order - b.order);
-}
-
-function cardMatchesFilters(card) {
-  if (filterType !== 'ALL' && card.type !== filterType) return false;
-  if (filterPriority !== 'ALL' && card.priority !== filterPriority) return false;
-  if (searchQuery) {
-    const q = searchQuery.toLowerCase();
-    const inTitle = card.title.toLowerCase().includes(q);
-    const inNotes = (card.notes || '').toLowerCase().includes(q);
-    if (!inTitle && !inNotes) return false;
-  }
-  return true;
-}
-
-function nextPriority(current) {
-  const idx = PRIORITIES.indexOf(current);
-  return PRIORITIES[(idx + 1) % PRIORITIES.length];
-}
-
-// ═══════════════════════════════════════════════════════════
-// RENDER BOARD
-// ═══════════════════════════════════════════════════════════
-function renderBoard() {
-  const container = document.getElementById('board-container');
-  if (!container) return;
-  container.innerHTML = '';
-
-  if (!board || !board.columns) return;
-
-  const sortedCols = [...board.columns].sort((a, b) => a.order - b.order);
-
-  for (const col of sortedCols) {
-    const colEl = document.createElement('div');
-    colEl.className = 'column';
-    colEl.dataset.columnId = col.id;
-
-    // Apply color theme dynamically
-    const themeName = col.color || DEFAULT_INDEX_COLORS[col.order % DEFAULT_INDEX_COLORS.length];
-    const colorTheme = COLUMN_COLORS[themeName] || COLUMN_COLORS.GRAY;
-    colEl.style.setProperty('--col-accent', colorTheme.hex);
-    colEl.style.setProperty('--col-accent-bg', colorTheme.bg);
-
-    const colCards = getCardsForColumn(col.id);
-    const visibleCards = colCards.filter(cardMatchesFilters);
-
-    // Header
-    const header = document.createElement('div');
-    header.className = 'column-header';
-    header.style.cursor = 'context-menu';
-    header.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showColumnContextMenu(e, col.id);
-    });
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'column-name';
-    nameEl.textContent = col.name;
-    nameEl.addEventListener('dblclick', () => {
-      nameEl.contentEditable = 'true';
-      nameEl.classList.add('editing');
-      nameEl.focus();
-      const range = document.createRange();
-      range.selectNodeContents(nameEl);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    });
-    const finishRename = () => {
-      nameEl.contentEditable = 'false';
-      nameEl.classList.remove('editing');
-      col.name = nameEl.textContent.trim() || col.name;
-      nameEl.textContent = col.name;
-      saveBoard();
-      renderBoard();
-    };
-    nameEl.addEventListener('blur', finishRename);
-    nameEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
-    });
-
-    const countEl = document.createElement('div');
-    countEl.className = 'column-count';
-    countEl.textContent = colCards.length;
-
-    header.appendChild(nameEl);
-    header.appendChild(countEl);
-    colEl.appendChild(header);
-
-    // Body
-    const body = document.createElement('div');
-    body.className = 'column-body';
-    body.dataset.columnId = col.id;
-
-    // Drag events on column body
-    body.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      body.classList.add('drag-over');
-
-      // Intra-column reorder: find closest card to insert before
-      const afterEl = getDragAfterElement(body, e.clientY);
-      const existing = body.querySelector('.drop-placeholder');
-      if (!existing) {
-        const placeholder = document.createElement('div');
-        placeholder.className = 'drop-placeholder';
-        if (afterEl) body.insertBefore(placeholder, afterEl);
-        else body.appendChild(placeholder);
-      } else {
-        if (afterEl) body.insertBefore(existing, afterEl);
-        else body.appendChild(existing);
-      }
-    });
-
-    body.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      body.classList.add('drag-over');
-    });
-
-    body.addEventListener('dragleave', (e) => {
-      if (!body.contains(e.relatedTarget)) {
-        body.classList.remove('drag-over');
-        const ph = body.querySelector('.drop-placeholder');
-        if (ph) ph.remove();
-      }
-    });
-
-    body.addEventListener('drop', (e) => {
-      e.preventDefault();
-      body.classList.remove('drag-over');
-      const ph = body.querySelector('.drop-placeholder');
-      if (ph) ph.remove();
-
-      if (!draggedCardId) return;
-      const card = board.cards.find(c => c.id === draggedCardId);
-      if (!card) return;
-
-      card.columnId = col.id;
-      card.updatedAt = Date.now();
-
-      // Compute new order
-      const afterEl = getDragAfterElement(body, e.clientY);
-      const colCardsNow = getCardsForColumn(col.id).filter(c => c.id !== card.id);
-
-      if (afterEl) {
-        const afterId = afterEl.dataset.cardId;
-        const afterIdx = colCardsNow.findIndex(c => c.id === afterId);
-        colCardsNow.splice(afterIdx, 0, card);
-      } else {
-        colCardsNow.push(card);
-      }
-      colCardsNow.forEach((c, i) => c.order = i);
-
-      saveBoard();
-      renderBoard();
-    });
-
-    if (visibleCards.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'column-empty';
-      empty.textContent = 'Drop here or quick-add below';
-      body.appendChild(empty);
-    } else {
-      for (const card of visibleCards) {
-        body.appendChild(renderCard(card));
-      }
-    }
-
-    colEl.appendChild(body);
-
-    // Footer with quick-add
-    const footer = document.createElement('div');
-    footer.className = 'column-footer';
-    const quickAdd = document.createElement('button');
-    quickAdd.className = 'column-quick-add';
-    quickAdd.textContent = '+ Add card';
-    quickAdd.addEventListener('click', () => {
-      const title = prompt('Card title:');
-      if (!title || !title.trim()) return;
-      createCard(title.trim(), board.meta.lastType || 'NOTE', col.id);
-    });
-    footer.appendChild(quickAdd);
-    colEl.appendChild(footer);
-
-    container.appendChild(colEl);
-  }
-
-  // Add Column button
-  if (board.columns.length < MAX_COLUMNS) {
-    const addColBtn = document.createElement('button');
-    addColBtn.id = 'add-column-btn';
-    addColBtn.textContent = '+';
-    addColBtn.title = 'Add column (max ' + MAX_COLUMNS + ')';
-    addColBtn.addEventListener('click', () => {
-      const name = prompt('Column name:');
-      if (!name || !name.trim()) return;
-      board.columns.push({
-        id: crypto.randomUUID(),
-        name: name.trim().toUpperCase(),
-        order: board.columns.length
-      });
-      saveBoard();
-      renderBoard();
-    });
-    container.appendChild(addColBtn);
-  }
-}
-
-function renderCard(card) {
-  const el = document.createElement('div');
+function renderCard(card, { draggable = false } = {}) {
+  const el = document.createElement('article');
   el.className = 'card';
   el.dataset.cardId = card.id;
-  el.dataset.type = card.type;
-  el.draggable = true;
+  el.draggable = draggable;
+  el.tabIndex = 0;
 
-  // Drag
-  el.addEventListener('dragstart', (e) => {
-    draggedCardId = card.id;
-    el.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', card.id);
-  });
-  el.addEventListener('dragend', () => {
-    draggedCardId = null;
-    el.classList.remove('dragging');
-    document.querySelectorAll('.drag-over').forEach(d => d.classList.remove('drag-over'));
-    document.querySelectorAll('.drop-placeholder').forEach(p => p.remove());
-  });
-
-  // Click -> open modal
-  el.addEventListener('click', (e) => {
-    if (e.target.classList.contains('card-priority') || e.target.classList.contains('card-url')) return;
-    openModal(card.id);
-  });
-
-  // Right-click -> context menu
-  el.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    showContextMenu(e, card.id);
-  });
-
-  // Header
-  const header = document.createElement('div');
-  header.className = 'card-header';
-
+  const top = document.createElement('div');
+  top.className = 'card-top';
   const title = document.createElement('div');
   title.className = 'card-title';
   title.textContent = card.title;
-
-  const priority = document.createElement('div');
-  priority.className = 'card-priority';
+  const priority = document.createElement('span');
+  priority.className = 'priority-dot';
   priority.dataset.priority = card.priority;
-  priority.title = 'Priority: ' + card.priority + ' (click to cycle)';
-  priority.addEventListener('click', (e) => {
-    e.stopPropagation();
-    card.priority = nextPriority(card.priority);
-    card.updatedAt = Date.now();
-    saveBoard();
-    renderBoard();
-  });
+  priority.title = `Priority: ${card.priority}`;
+  top.append(title, priority);
+  el.appendChild(top);
 
-  header.appendChild(title);
-  header.appendChild(priority);
-  el.appendChild(header);
+  if (card.nextAction) {
+    const next = document.createElement('div');
+    next.className = 'next-action';
+    next.textContent = card.nextAction;
+    el.appendChild(next);
+  }
 
-  // Meta row
   const meta = document.createElement('div');
   meta.className = 'card-meta';
-
-  const typeTag = document.createElement('span');
-  typeTag.className = 'card-tag type-tag';
-  typeTag.dataset.type = card.type;
-  typeTag.textContent = TYPE_ICONS[card.type] + ' ' + card.type;
-  meta.appendChild(typeTag);
-
-  if (card.aiModel) {
-    const aiTag = document.createElement('span');
-    aiTag.className = 'card-tag ai-tag';
-    aiTag.textContent = card.aiModel;
-    meta.appendChild(aiTag);
+  meta.appendChild(makeBadge(`${TYPE_ICONS[card.type] || '•'} ${card.type}`, card.type));
+  if (card.aiModel) meta.appendChild(makeBadge(card.aiModel));
+  if (card.subtasks?.length) {
+    const done = card.subtasks.filter(item => item.done).length;
+    meta.appendChild(makeBadge(`${done}/${card.subtasks.length}`));
   }
-
-  if (card.subtasks && card.subtasks.length > 0) {
-    const doneCount = card.subtasks.filter(s => s.done).length;
-    const subtaskTag = document.createElement('span');
-    subtaskTag.className = 'card-tag';
-    subtaskTag.style.background = 'rgba(255, 255, 255, 0.04)';
-    subtaskTag.style.border = '1px solid var(--border-color)';
-    subtaskTag.style.color = 'var(--text-muted)';
-    subtaskTag.textContent = `📋 ${doneCount}/${card.subtasks.length}`;
-    meta.appendChild(subtaskTag);
-  }
-
-  const time = document.createElement('span');
-  time.className = 'card-time';
-  time.textContent = relativeTime(card.updatedAt);
-  time.title = 'Updated: ' + new Date(card.updatedAt).toLocaleString();
-  meta.appendChild(time);
-
+  const age = document.createElement('span');
+  const stale = staleInfo(card);
+  age.className = `card-age${stale.veryStale ? ' very-stale' : stale.stale ? ' stale' : ''}`;
+  age.textContent = relativeTime(card.updatedAt);
+  age.title = `Updated ${new Date(card.updatedAt).toLocaleString()}`;
+  meta.appendChild(age);
   el.appendChild(meta);
 
-  // URL
   if (card.url) {
-    const urlLink = document.createElement('a');
-    urlLink.className = 'card-url';
-    urlLink.href = card.url;
-    urlLink.target = '_blank';
-    urlLink.rel = 'noopener';
-    urlLink.textContent = card.url;
-    urlLink.addEventListener('click', (e) => e.stopPropagation());
-    el.appendChild(urlLink);
+    const link = document.createElement('a');
+    link.className = 'card-url';
+    link.href = card.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = card.url;
+    link.addEventListener('click', event => event.stopPropagation());
+    el.appendChild(link);
+  }
+
+  const open = () => openInspector(card.id);
+  el.addEventListener('click', open);
+  el.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      open();
+    }
+  });
+  el.addEventListener('contextmenu', event => {
+    event.preventDefault();
+    showCardContextMenu(event, card.id);
+  });
+
+  if (draggable) {
+    el.addEventListener('dragstart', event => {
+      draggedCardId = card.id;
+      el.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', card.id);
+    });
+    el.addEventListener('dragend', () => {
+      draggedCardId = null;
+      el.classList.remove('dragging');
+      $$('.drag-over').forEach(node => node.classList.remove('drag-over'));
+      $$('.drop-placeholder').forEach(node => node.remove());
+    });
   }
 
   return el;
 }
 
-function getDragAfterElement(container, y) {
-  const cards = [...container.querySelectorAll('.card:not(.dragging)')];
-  let closest = null;
-  let closestOffset = Number.NEGATIVE_INFINITY;
-
-  for (const card of cards) {
-    const box = card.getBoundingClientRect();
-    const offset = y - box.top - box.height / 2;
-    if (offset < 0 && offset > closestOffset) {
-      closestOffset = offset;
-      closest = card;
-    }
-  }
-  return closest;
+function matchesCurrentFilters(card) {
+  return cardMatches(card, { query: searchQuery, type: filterType, priority: filterPriority });
 }
 
-// ═══════════════════════════════════════════════════════════
-// CARD CRUD
-// ═══════════════════════════════════════════════════════════
-function createCard(title, type, columnId) {
-  const col = columnId || board.columns[0].id;
-  const now = Date.now();
-  const colCards = getCardsForColumn(col);
-  let url = '';
-  if (isUrl(title)) {
-    url = title.trim();
-    type = 'URL';
-  }
-  const card = {
-    id: crypto.randomUUID(),
-    columnId: col,
-    type: type,
-    title: title,
-    url: url,
-    notes: '',
-    priority: 'MED',
-    aiModel: '',
-    order: colCards.length,
-    createdAt: now,
-    updatedAt: now
-  };
-  board.cards.push(card);
-  board.meta.lastType = type;
-  saveBoard();
-  renderBoard();
-}
+function renderFocus() {
+  const root = $('focus-view');
+  if (!root || !board) return;
+  root.innerHTML = '';
 
-function deleteCard(cardId) {
-  board.cards = board.cards.filter(c => c.id !== cardId);
-  saveBoard();
-  renderBoard();
-}
+  const shell = document.createElement('div');
+  shell.className = 'focus-shell';
+  const header = document.createElement('div');
+  header.className = 'focus-header';
+  const headingWrap = document.createElement('div');
+  const heading = document.createElement('h1');
+  heading.textContent = 'What matters now';
+  const sub = document.createElement('p');
+  sub.textContent = 'Resume fast. Keep the active surface small.';
+  headingWrap.append(heading, sub);
+  header.appendChild(headingWrap);
+  shell.appendChild(header);
 
-function archiveCard(cardId) {
-  const idx = board.cards.findIndex(c => c.id === cardId);
-  if (idx === -1) return;
-  const card = board.cards.splice(idx, 1)[0];
-  archive.push(card);
-  saveArchive();
-  saveBoard();
-  renderBoard();
-}
-
-function duplicateCard(cardId) {
-  const orig = board.cards.find(c => c.id === cardId);
-  if (!orig) return;
-  const now = Date.now();
-  const colCards = getCardsForColumn(orig.columnId);
-  const copy = {
-    ...orig,
-    id: crypto.randomUUID(),
-    title: orig.title + ' (copy)',
-    order: colCards.length,
-    createdAt: now,
-    updatedAt: now
-  };
-  board.cards.push(copy);
-  saveBoard();
-  renderBoard();
-}
-
-function moveCardToColumn(cardId, colId) {
-  const card = board.cards.find(c => c.id === cardId);
-  if (!card) return;
-  card.columnId = colId;
-  card.updatedAt = Date.now();
-  const colCards = getCardsForColumn(colId).filter(c => c.id !== cardId);
-  card.order = colCards.length;
-  saveBoard();
-  renderBoard();
-}
-
-// ═══════════════════════════════════════════════════════════
-// CONTEXT MENU
-// ═══════════════════════════════════════════════════════════
-function showContextMenu(e, cardId) {
-  const menu = document.getElementById('context-menu');
-  const card = board.cards.find(c => c.id === cardId);
-  if (!card) return;
-
-  let html = '';
-
-  // Move to submenu
-  html += '<button class="ctx-item" style="font-weight:600;color:var(--text-muted);cursor:default;pointer-events:none;">Move to…</button>';
-  for (const col of board.columns.sort((a, b) => a.order - b.order)) {
-    if (col.id === card.columnId) continue;
-    html += '<button class="ctx-item ctx-submenu" data-action="move" data-col-id="' + col.id + '">' + escapeHtml(col.name) + '</button>';
-  }
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item" data-action="duplicate">📋 Duplicate</button>';
-  html += '<button class="ctx-item" data-action="archive">📦 Archive</button>';
-  if (card.url) {
-    html += '<button class="ctx-item" data-action="copyurl">🔗 Copy URL</button>';
-  }
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item danger" data-action="delete">🗑 Delete</button>';
-
-  menu.innerHTML = html;
-  menu.classList.add('visible');
-
-  // Position
-  const mx = e.clientX;
-  const my = e.clientY;
-  const mw = menu.offsetWidth;
-  const mh = menu.offsetHeight;
-  menu.style.left = (mx + mw > window.innerWidth ? mx - mw : mx) + 'px';
-  menu.style.top = (my + mh > window.innerHeight ? my - mh : my) + 'px';
-
-  // Bind actions
-  menu.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.action;
-      if (action === 'move') moveCardToColumn(cardId, btn.dataset.colId);
-      else if (action === 'duplicate') duplicateCard(cardId);
-      else if (action === 'archive') archiveCard(cardId);
-      else if (action === 'copyurl') { try { navigator.clipboard.writeText(card.url); } catch(e) {} }
-      else if (action === 'delete') { if (confirm('Delete "' + card.title + '"?')) deleteCard(cardId); }
-      hideContextMenu();
+  if (isLegacyDefaultBoard(board)) {
+    const banner = document.createElement('div');
+    banner.className = 'legacy-banner';
+    const text = document.createElement('span');
+    text.textContent = 'Your board still uses the old BACKLOG / ACTIVE / PARKED / DONE defaults.';
+    const upgrade = document.createElement('button');
+    upgrade.className = 'btn btn-primary btn-sm';
+    upgrade.textContent = 'Upgrade workflow';
+    upgrade.addEventListener('click', () => {
+      upgradeLegacyDefaultBoard(board);
+      saveBoard(true);
+      renderAll();
+      toast('Workflow upgraded. Existing cards were kept.');
     });
+    banner.append(text, upgrade);
+    shell.appendChild(banner);
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'focus-grid';
+  const lanes = focusColumns(board);
+  lanes.forEach(col => {
+    const lane = document.createElement('section');
+    lane.className = 'focus-lane';
+    lane.dataset.name = col.name.toUpperCase();
+    const laneHead = document.createElement('div');
+    laneHead.className = 'focus-lane-head';
+    const title = document.createElement('h2');
+    title.textContent = col.name;
+    const allCards = cardsForColumn(board, col.id);
+    const visible = allCards.filter(matchesCurrentFilters);
+    const count = document.createElement('span');
+    count.textContent = String(allCards.length);
+    laneHead.append(title, count);
+    lane.appendChild(laneHead);
+    const list = document.createElement('div');
+    list.className = 'focus-list';
+    if (!visible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'focus-empty';
+      empty.textContent = searchQuery ? 'No matching cards.' : 'Nothing here.';
+      list.appendChild(empty);
+    } else {
+      visible.forEach(card => list.appendChild(renderCard(card)));
+    }
+    lane.appendChild(list);
+    grid.appendChild(lane);
   });
+  shell.appendChild(grid);
+
+  const footer = document.createElement('div');
+  footer.className = 'focus-footer';
+  const openCards = board.cards.filter(card => findColumnByName(board, 'DONE')?.id !== card.columnId).length;
+  const stale = board.cards.filter(card => staleInfo(card).stale).length;
+  footer.textContent = `${openCards} open · ${stale} stale (3d+) · / capture · ⌘K command palette`;
+  shell.appendChild(footer);
+  root.appendChild(shell);
+}
+
+function renderBoard() {
+  const container = $('board-container');
+  if (!container || !board) return;
+  container.innerHTML = '';
+
+  sortedColumns(board).forEach((col, columnIndex) => {
+    const column = document.createElement('section');
+    column.className = 'column';
+    column.dataset.columnId = col.id;
+    column.dataset.columnName = col.name.toUpperCase();
+    if (col.color) column.style.setProperty('--column-accent', col.color);
+    else if (!['NOW', 'NEXT', 'WAITING', 'INBOX'].includes(col.name.toUpperCase())) {
+      column.style.setProperty('--column-accent', COLUMN_ACCENTS[columnIndex % COLUMN_ACCENTS.length]);
+    }
+
+    const header = document.createElement('div');
+    header.className = 'column-header';
+    const name = document.createElement('div');
+    name.className = 'column-name';
+    name.textContent = col.name;
+    name.title = 'Double-click to rename';
+    name.addEventListener('dblclick', () => beginColumnRename(name, col));
+    const count = document.createElement('span');
+    count.className = 'column-count';
+    count.textContent = String(cardsForColumn(board, col.id).length);
+    const menu = document.createElement('button');
+    menu.className = 'column-menu';
+    menu.textContent = '•••';
+    menu.title = 'Column options';
+    menu.addEventListener('click', event => {
+      event.stopPropagation();
+      showColumnContextMenu(event, col.id);
+    });
+    header.append(name, count, menu);
+    column.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'column-body';
+    body.dataset.columnId = col.id;
+    body.addEventListener('dragover', event => handleDragOver(event, body));
+    body.addEventListener('dragleave', event => {
+      if (!body.contains(event.relatedTarget)) {
+        body.classList.remove('drag-over');
+        body.querySelector('.drop-placeholder')?.remove();
+      }
+    });
+    body.addEventListener('drop', event => handleDrop(event, body, col.id));
+
+    const visible = cardsForColumn(board, col.id).filter(matchesCurrentFilters);
+    if (!visible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'column-empty';
+      empty.textContent = searchQuery ? 'No matches' : 'Drop here';
+      body.appendChild(empty);
+    } else {
+      visible.forEach(card => body.appendChild(renderCard(card, { draggable: true })));
+    }
+    column.appendChild(body);
+
+    const footer = document.createElement('div');
+    footer.className = 'column-footer';
+    const input = document.createElement('input');
+    input.className = 'inline-add';
+    input.placeholder = '+ Add here';
+    input.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      const title = input.value.trim();
+      if (!title) return;
+      const type = isUrl(title) ? 'URL' : board.meta.lastType || 'NOTE';
+      const card = createCard(board, { title, type, columnId: col.id, url: isUrl(title) ? title : '' });
+      input.value = '';
+      saveBoard();
+      renderAll();
+      openInspector(card.id);
+    });
+    footer.appendChild(input);
+    column.appendChild(footer);
+    container.appendChild(column);
+  });
+
+  if (board.columns.length < 10) {
+    const add = document.createElement('button');
+    add.className = 'add-column';
+    add.textContent = '+';
+    add.title = 'Add column';
+    add.addEventListener('click', addColumn);
+    container.appendChild(add);
+  }
+}
+
+function beginColumnRename(nameEl, col) {
+  nameEl.contentEditable = 'true';
+  nameEl.focus();
+  const range = document.createRange();
+  range.selectNodeContents(nameEl);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const finish = () => {
+    nameEl.contentEditable = 'false';
+    const next = nameEl.textContent.trim().toUpperCase();
+    if (next && !board.columns.some(other => other.id !== col.id && other.name.toUpperCase() === next)) col.name = next;
+    nameEl.textContent = col.name;
+    saveBoard();
+    populateDestinationSelects();
+    renderAll();
+  };
+  nameEl.addEventListener('blur', finish, { once: true });
+  nameEl.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); nameEl.blur(); }
+    if (event.key === 'Escape') { event.preventDefault(); nameEl.textContent = col.name; nameEl.blur(); }
+  }, { once: true });
+}
+
+function getDropIndex(body, y) {
+  const cards = $$('.card:not(.dragging)', body);
+  let best = cards.length;
+  for (let index = 0; index < cards.length; index += 1) {
+    const rect = cards[index].getBoundingClientRect();
+    if (y < rect.top + rect.height / 2) { best = index; break; }
+  }
+  return best;
+}
+
+function handleDragOver(event, body) {
+  event.preventDefault();
+  body.classList.add('drag-over');
+  const index = getDropIndex(body, event.clientY);
+  let placeholder = body.querySelector('.drop-placeholder');
+  if (!placeholder) {
+    placeholder = document.createElement('div');
+    placeholder.className = 'drop-placeholder';
+  }
+  const cards = $$('.card:not(.dragging)', body);
+  if (index >= cards.length) body.appendChild(placeholder);
+  else body.insertBefore(placeholder, cards[index]);
+}
+
+function handleDrop(event, body, columnId) {
+  event.preventDefault();
+  body.classList.remove('drag-over');
+  const targetIndex = getDropIndex(body, event.clientY);
+  body.querySelector('.drop-placeholder')?.remove();
+  if (!draggedCardId) return;
+  moveCard(board, draggedCardId, columnId, targetIndex);
+  saveBoard();
+  renderAll();
+}
+
+function addColumn() {
+  const raw = prompt('Column name');
+  const name = raw?.trim().toUpperCase();
+  if (!name || board.columns.some(col => col.name.toUpperCase() === name)) return;
+  board.columns.push({ id: makeId(), name, order: board.columns.length });
+  saveBoard();
+  renderAll();
+}
+
+function showContextMenu(event, items) {
+  const menu = $('context-menu');
+  menu.innerHTML = '';
+  items.forEach(item => {
+    if (item === 'separator') {
+      const sep = document.createElement('div');
+      sep.className = 'context-sep';
+      menu.appendChild(sep);
+      return;
+    }
+    const button = document.createElement('button');
+    button.className = `context-item${item.danger ? ' danger' : ''}`;
+    button.textContent = item.label;
+    button.addEventListener('click', () => {
+      hideContextMenu();
+      item.run();
+    });
+    menu.appendChild(button);
+  });
+  menu.classList.remove('hidden');
+  const x = Math.min(event.clientX, window.innerWidth - 210);
+  const y = Math.min(event.clientY, window.innerHeight - Math.min(300, menu.scrollHeight + 10));
+  menu.style.left = `${Math.max(6, x)}px`;
+  menu.style.top = `${Math.max(6, y)}px`;
 }
 
 function hideContextMenu() {
-  const menu = document.getElementById('context-menu');
-  if (menu) menu.classList.remove('visible');
+  $('context-menu')?.classList.add('hidden');
 }
 
-// ═══════════════════════════════════════════════════════════
-// DETAIL MODAL
-// ═══════════════════════════════════════════════════════════
-function openModal(cardId) {
-  const card = board.cards.find(c => c.id === cardId);
+function showCardContextMenu(event, cardId) {
+  const card = board.cards.find(item => item.id === cardId);
   if (!card) return;
-  activeModalCardId = cardId;
-  modalOpen = true;
-
-  document.getElementById('modal-title').value = card.title;
-  document.getElementById('modal-type').value = card.type;
-  document.getElementById('modal-priority').value = card.priority;
-  document.getElementById('modal-url').value = card.url || '';
-  document.getElementById('modal-notes').value = card.notes || '';
-  document.getElementById('modal-ai-model').value = card.aiModel || '';
-
-  // Initialize activeModalSubtasks
-  activeModalSubtasks = card.subtasks ? JSON.parse(JSON.stringify(card.subtasks)) : [];
-  renderChecklist(activeModalSubtasks);
-  document.getElementById('new-subtask-input').value = '';
-
-  // Populate column select
-  const colSelect = document.getElementById('modal-column');
-  colSelect.innerHTML = '';
-  for (const col of board.columns.sort((a, b) => a.order - b.order)) {
-    const opt = document.createElement('option');
-    opt.value = col.id;
-    opt.textContent = col.name;
-    if (col.id === card.columnId) opt.selected = true;
-    colSelect.appendChild(opt);
-  }
-
-  document.getElementById('modal-created').textContent = 'Created: ' + relativeTime(card.createdAt);
-  document.getElementById('modal-updated').textContent = 'Modified: ' + relativeTime(card.updatedAt);
-
-  document.getElementById('modal-overlay').classList.add('visible');
+  showContextMenu(event, [
+    { label: 'Open / resume', run: () => openInspector(cardId) },
+    { label: 'Copy local handoff', run: () => copyCardHandoff(cardId) },
+    { label: 'Duplicate', run: () => { duplicateCard(board, cardId); saveBoard(); renderAll(); } },
+    { label: 'Archive', run: () => archiveCard(cardId) },
+    'separator',
+    { label: 'Delete permanently', danger: true, run: () => deleteCard(cardId) }
+  ]);
 }
 
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('visible');
-  activeModalCardId = null;
-  modalOpen = false;
+function showColumnContextMenu(event, columnId) {
+  const col = board.columns.find(item => item.id === columnId);
+  const index = sortedColumns(board).findIndex(item => item.id === columnId);
+  if (!col) return;
+  const items = [
+    { label: 'Rename', run: () => {
+      const el = document.querySelector(`.column[data-column-id="${CSS.escape(columnId)}"] .column-name`);
+      if (el) beginColumnRename(el, col);
+    } }
+  ];
+  if (index > 0) items.push({ label: 'Move left', run: () => moveColumn(columnId, -1) });
+  if (index < board.columns.length - 1) items.push({ label: 'Move right', run: () => moveColumn(columnId, 1) });
+  items.push('separator', { label: 'Delete column', danger: true, run: () => deleteColumn(columnId) });
+  showContextMenu(event, items);
 }
 
-function saveModal() {
-  const card = board.cards.find(c => c.id === activeModalCardId);
+function moveColumn(columnId, direction) {
+  const columns = sortedColumns(board);
+  const index = columns.findIndex(col => col.id === columnId);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= columns.length) return;
+  [columns[index], columns[target]] = [columns[target], columns[index]];
+  columns.forEach((col, order) => { col.order = order; });
+  board.columns = columns;
+  saveBoard();
+  renderAll();
+}
+
+function deleteColumn(columnId) {
+  if (board.columns.length <= 1) return toast('Keep at least one column.');
+  const col = board.columns.find(item => item.id === columnId);
+  if (!col) return;
+  const fallback = sortedColumns(board).find(item => item.id !== columnId);
+  const affected = board.cards.filter(card => card.columnId === columnId).length;
+  if (!confirm(`Delete ${col.name}? ${affected ? `${affected} card(s) will move to ${fallback.name}.` : ''}`)) return;
+  board.cards.filter(card => card.columnId === columnId).forEach(card => { card.columnId = fallback.id; card.updatedAt = Date.now(); });
+  board.columns = sortedColumns(board).filter(item => item.id !== columnId);
+  board.columns.forEach((item, order) => { item.order = order; });
+  saveBoard();
+  renderAll();
+}
+
+function handleQuickCapture() {
+  if (!board) return;
+  const input = $('quick-input');
+  const title = input.value.trim();
+  if (!title) return;
+  const destinationId = $('quick-destination').value || preferredCaptureColumn(board).id;
+  let type = $('quick-type-select').value;
+  if (isUrl(title)) type = 'URL';
+  const card = createCard(board, { title, type, columnId: destinationId, url: isUrl(title) ? title : '' });
+  input.value = '';
+  saveBoard();
+  renderAll();
+  toast(`Captured to ${board.columns.find(col => col.id === card.columnId)?.name || 'workspace'}`);
+}
+
+function openInspector(cardId) {
+  const card = board?.cards.find(item => item.id === cardId);
   if (!card) return;
-
-  card.title = document.getElementById('modal-title').value.trim() || card.title;
-  card.type = document.getElementById('modal-type').value;
-  card.priority = document.getElementById('modal-priority').value;
-  card.url = document.getElementById('modal-url').value.trim();
-  card.notes = document.getElementById('modal-notes').value;
-  card.aiModel = document.getElementById('modal-ai-model').value.trim();
-  card.subtasks = activeModalSubtasks; // Save subtasks
-
-  const newColId = document.getElementById('modal-column').value;
-  if (newColId !== card.columnId) {
-    card.columnId = newColId;
-    const colCards = getCardsForColumn(newColId).filter(c => c.id !== card.id);
-    card.order = colCards.length;
-  }
-
-  card.updatedAt = Date.now();
-  saveBoard();
-  renderBoard();
-  closeModal();
+  activeCardId = cardId;
+  populateDestinationSelects();
+  $('card-title').value = card.title;
+  $('card-next-action').value = card.nextAction || '';
+  $('card-column').value = card.columnId;
+  $('card-priority').value = card.priority;
+  $('card-type').value = card.type;
+  $('card-ai-model').value = card.aiModel || '';
+  $('card-url').value = card.url || '';
+  $('card-blocker').value = card.blocker || '';
+  $('card-notes').value = card.notes || '';
+  $('card-timestamps').textContent = `Created ${new Date(card.createdAt).toLocaleString()} · Updated ${relativeTime(card.updatedAt)}`;
+  $('ai-card-output').classList.add('hidden');
+  $('ai-card-output').replaceChildren();
+  renderChecklist(card);
+  $('inspector-backdrop').classList.remove('hidden');
+  $('inspector').classList.remove('hidden');
+  setTimeout(() => $('card-next-action').focus(), 0);
 }
 
-// ═══════════════════════════════════════════════════════════
-// COLUMN & ARCHIVE OPTIONS / HELPERS
-// ═══════════════════════════════════════════════════════════
-function renderChecklist(subtasks) {
-  const container = document.getElementById('modal-checklist');
-  container.innerHTML = '';
-  if (!subtasks || subtasks.length === 0) {
-    container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; font-style:italic; padding:4px 0;">No subtasks yet.</div>';
-    return;
-  }
-  subtasks.forEach((sub, idx) => {
-    const item = document.createElement('div');
-    item.className = 'subtask-item';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.className = 'subtask-checkbox';
-    checkbox.checked = sub.done;
-    checkbox.addEventListener('change', () => {
-      sub.done = checkbox.checked;
-      textSpan.className = checkbox.checked ? 'subtask-text completed' : 'subtask-text';
-    });
-
-    const textSpan = document.createElement('span');
-    textSpan.className = sub.done ? 'subtask-text completed' : 'subtask-text';
-    textSpan.textContent = sub.text;
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn-icon';
-    delBtn.innerHTML = '✕';
-    delBtn.title = 'Remove subtask';
-    delBtn.style.padding = '2px 6px';
-    delBtn.addEventListener('click', () => {
-      subtasks.splice(idx, 1);
-      renderChecklist(subtasks);
-    });
-
-    item.appendChild(checkbox);
-    item.appendChild(textSpan);
-    item.appendChild(delBtn);
-    container.appendChild(item);
-  });
+function closeInspector() {
+  activeCardId = null;
+  $('inspector-backdrop').classList.add('hidden');
+  $('inspector').classList.add('hidden');
 }
 
-function showColumnContextMenu(e, colId) {
-  const menu = document.getElementById('context-menu');
-  const col = board.columns.find(c => c.id === colId);
-  if (!col) return;
-
-  let html = '';
-  
-  html += '<button class="ctx-item" data-action="rename">📝 Rename Column</button>';
-  html += '<div class="ctx-separator"></div>';
-  
-  const idx = board.columns.findIndex(c => c.id === colId);
-  const isFirst = idx === 0;
-  const isLast = idx === board.columns.length - 1;
-  
-  if (!isFirst) {
-    html += '<button class="ctx-item" data-action="move-left">◀ Move Left</button>';
-  }
-  if (!isLast) {
-    html += '<button class="ctx-item" data-action="move-right">▶ Move Right</button>';
-  }
-  
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item" style="font-weight:600;color:var(--text-muted);cursor:default;pointer-events:none;">Set Color Accent</button>';
-  
-  Object.keys(COLUMN_COLORS).forEach(cName => {
-    const colorInfo = COLUMN_COLORS[cName];
-    const dot = `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${colorInfo.hex}; margin-right:8px; vertical-align:middle;"></span>`;
-    const activeGlow = col.color === cName ? ' ✓' : '';
-    html += `<button class="ctx-item ctx-submenu" data-action="set-color" data-color="${cName}">${dot}${colorInfo.name}${activeGlow}</button>`;
-  });
-  
-  html += '<div class="ctx-separator"></div>';
-  html += '<button class="ctx-item danger" data-action="delete-col">🗑 Delete Column</button>';
-
-  menu.innerHTML = html;
-  menu.classList.add('visible');
-
-  // Position
-  const mx = e.clientX;
-  const my = e.clientY;
-  const mw = menu.offsetWidth;
-  const mh = menu.offsetHeight;
-  menu.style.left = (mx + mw > window.innerWidth ? mx - mw : mx) + 'px';
-  menu.style.top = (my + mh > window.innerHeight ? my - mh : my) + 'px';
-
-  // Bind actions
-  menu.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.action;
-      if (action === 'rename') {
-        const colEl = document.querySelector(`.column[data-column-id="${colId}"]`);
-        const nameEl = colEl ? colEl.querySelector('.column-name') : null;
-        if (nameEl) {
-          nameEl.contentEditable = 'true';
-          nameEl.classList.add('editing');
-          nameEl.focus();
-          const range = document.createRange();
-          range.selectNodeContents(nameEl);
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
-      }
-      else if (action === 'move-left') moveColumn(colId, -1);
-      else if (action === 'move-right') moveColumn(colId, 1);
-      else if (action === 'set-color') setColumnColor(colId, btn.dataset.color);
-      else if (action === 'delete-col') deleteColumn(colId);
-      hideContextMenu();
-    });
-  });
+function activeCard() {
+  return board?.cards.find(card => card.id === activeCardId) || null;
 }
 
-function moveColumn(colId, direction) {
-  const idx = board.columns.findIndex(c => c.id === colId);
-  if (idx === -1) return;
-  const targetIdx = idx + direction;
-  if (targetIdx < 0 || targetIdx >= board.columns.length) return;
-  
-  const temp = board.columns[idx];
-  board.columns[idx] = board.columns[targetIdx];
-  board.columns[targetIdx] = temp;
-  
-  board.columns.forEach((c, i) => c.order = i);
-  
-  saveBoard();
-  renderBoard();
-}
-
-function setColumnColor(colId, colorName) {
-  const col = board.columns.find(c => c.id === colId);
-  if (!col) return;
-  col.color = colorName;
-  saveBoard();
-  renderBoard();
-}
-
-function deleteColumn(colId) {
-  const col = board.columns.find(c => c.id === colId);
-  if (!col) return;
-  
-  const colCards = getCardsForColumn(colId);
-  if (colCards.length > 0) {
-    const confirmMsg = `The column "${col.name}" contains ${colCards.length} card(s).\n\nAre you sure you want to delete this column and all its cards?`;
-    if (!confirm(confirmMsg)) return;
-    board.cards = board.cards.filter(c => c.columnId !== colId);
+function syncInspectorField(field, value) {
+  const card = activeCard();
+  if (!card) return;
+  if (field === 'columnId') {
+    if (value !== card.columnId) moveCard(board, card.id, value);
   } else {
-    if (!confirm(`Delete empty column "${col.name}"?`)) return;
+    card[field] = value;
+    card.updatedAt = Date.now();
   }
-  
-  board.columns = board.columns.filter(c => c.id !== colId);
-  board.columns.forEach((c, idx) => c.order = idx);
-  
   saveBoard();
+  renderFocus();
   renderBoard();
+  $('inspector-status').textContent = 'Saving…';
+  setTimeout(() => { if (activeCardId) $('inspector-status').textContent = 'Autosaved'; }, 700);
 }
 
-function openArchiveModal() {
-  archiveModalOpen = true;
-  archiveSearchQuery = '';
-  document.getElementById('archive-search-input').value = '';
-  renderArchiveList();
-  document.getElementById('archive-overlay').style.display = 'flex';
-}
-
-function closeArchiveModal() {
-  document.getElementById('archive-overlay').style.display = 'none';
-  archiveModalOpen = false;
-}
-
-function renderArchiveList() {
-  const list = document.getElementById('archive-items-list');
-  if (!list) return;
-  list.innerHTML = '';
-  
-  const filtered = archive.filter(card => {
-    if (!archiveSearchQuery) return true;
-    const q = archiveSearchQuery.toLowerCase();
-    return card.title.toLowerCase().includes(q) || (card.notes || '').toLowerCase().includes(q);
-  });
-  
-  if (filtered.length === 0) {
-    list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:20px; font-style:italic;">No archived cards found.</div>';
+function renderChecklist(card) {
+  const root = $('card-checklist');
+  root.innerHTML = '';
+  if (!card.subtasks?.length) {
+    const empty = document.createElement('div');
+    empty.className = 'field-note';
+    empty.textContent = 'No checklist. Good — only add one when it helps.';
+    root.appendChild(empty);
     return;
   }
-  
-  filtered.forEach(card => {
-    const item = document.createElement('div');
-    item.className = 'archive-item';
-    
+  card.subtasks.forEach(subtask => {
+    const row = document.createElement('div');
+    row.className = `check-item${subtask.done ? ' done' : ''}`;
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = !!subtask.done;
+    check.addEventListener('change', () => {
+      subtask.done = check.checked;
+      card.updatedAt = Date.now();
+      saveBoard();
+      renderChecklist(card);
+      renderAll();
+    });
+    const text = document.createElement('span');
+    text.textContent = subtask.text;
+    const del = document.createElement('button');
+    del.className = 'btn btn-quiet btn-sm';
+    del.textContent = '✕';
+    del.addEventListener('click', () => {
+      card.subtasks = card.subtasks.filter(item => item.id !== subtask.id);
+      card.updatedAt = Date.now();
+      saveBoard();
+      renderChecklist(card);
+      renderAll();
+    });
+    row.append(check, text, del);
+    root.appendChild(row);
+  });
+}
+
+function addChecklistItem() {
+  const card = activeCard();
+  const input = $('check-input');
+  const text = input.value.trim();
+  if (!card || !text) return;
+  card.subtasks ||= [];
+  card.subtasks.push({ id: makeId(), text, done: false });
+  card.updatedAt = Date.now();
+  input.value = '';
+  saveBoard();
+  renderChecklist(card);
+  renderAll();
+}
+
+async function copyText(text, success = 'Copied') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(success);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+    toast(success);
+  }
+}
+
+function copyCardHandoff(cardId = activeCardId) {
+  const card = board?.cards.find(item => item.id === cardId);
+  if (!card) return;
+  const column = board.columns.find(col => col.id === card.columnId);
+  copyText(cardToHandoff(card, column?.name || ''), 'Local handoff copied');
+}
+
+function archiveCard(cardId = activeCardId) {
+  if (!board || !cardId) return;
+  archiveCardCore(board, archive, cardId);
+  saveBoard();
+  saveArchive();
+  if (activeCardId === cardId) closeInspector();
+  renderAll();
+  toast('Archived');
+}
+
+function deleteCard(cardId = activeCardId) {
+  const card = board?.cards.find(item => item.id === cardId);
+  if (!card) return;
+  if (!confirm(`Delete “${card.title}” permanently?`)) return;
+  board.cards = board.cards.filter(item => item.id !== cardId);
+  saveBoard();
+  if (activeCardId === cardId) closeInspector();
+  renderAll();
+}
+
+function openOverlay(id) {
+  $(id)?.classList.remove('hidden');
+  if (id === 'archive-overlay') renderArchive();
+  if (id === 'settings-overlay') renderSettings();
+}
+
+function closeOverlay(id) {
+  $(id)?.classList.add('hidden');
+}
+
+function renderArchive() {
+  const root = $('archive-list');
+  root.innerHTML = '';
+  const q = $('archive-search').value.trim().toLowerCase();
+  const cards = archive.filter(card => !q || [card.title, card.notes, card.nextAction].some(value => String(value || '').toLowerCase().includes(q)));
+  if (!cards.length) {
+    const empty = document.createElement('div');
+    empty.className = 'field-note';
+    empty.textContent = 'Archive is empty.';
+    root.appendChild(empty);
+    return;
+  }
+  cards.sort((a, b) => (b.archivedAt || b.updatedAt) - (a.archivedAt || a.updatedAt)).forEach(card => {
+    const row = document.createElement('div');
+    row.className = 'archive-item';
     const icon = document.createElement('span');
-    icon.style.fontSize = '16px';
-    icon.textContent = TYPE_ICONS[card.type] || '📝';
-    
-    const content = document.createElement('div');
-    content.style.flex = '1';
-    content.style.display = 'flex';
-    content.style.flexDirection = 'column';
-    content.style.gap = '2px';
-    content.style.overflow = 'hidden';
-    
+    icon.textContent = TYPE_ICONS[card.type] || '•';
+    const copy = document.createElement('div');
+    copy.className = 'archive-copy';
     const title = document.createElement('div');
-    title.className = 'archive-item-title';
+    title.className = 'archive-title';
     title.textContent = card.title;
-    
     const meta = document.createElement('div');
-    meta.className = 'archive-item-meta';
-    meta.textContent = `Archived ${relativeTime(card.updatedAt || card.createdAt)}`;
-    
-    content.appendChild(title);
-    content.appendChild(meta);
-    
-    const restoreBtn = document.createElement('button');
-    restoreBtn.className = 'btn btn-ghost btn-sm';
-    restoreBtn.style.padding = '4px 8px';
-    restoreBtn.textContent = 'Restore';
-    restoreBtn.addEventListener('click', () => {
-      restoreCard(card.id);
+    meta.className = 'archive-meta';
+    meta.textContent = `Archived ${relativeTime(card.archivedAt || card.updatedAt)}`;
+    copy.append(title, meta);
+    const restore = document.createElement('button');
+    restore.className = 'btn btn-sm';
+    restore.textContent = 'Restore';
+    restore.addEventListener('click', () => restoreCard(card.id));
+    const del = document.createElement('button');
+    del.className = 'btn btn-sm btn-danger';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => {
+      if (!confirm(`Permanently delete “${card.title}”?`)) return;
+      archive = archive.filter(item => item.id !== card.id);
+      saveArchive();
+      renderArchive();
     });
-    
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn btn-ghost btn-sm';
-    deleteBtn.style.padding = '4px 8px';
-    deleteBtn.style.color = 'var(--priority-high)';
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', () => {
-      if (confirm(`Permanently delete "${card.title}"? This cannot be undone.`)) {
-        archive = archive.filter(c => c.id !== card.id);
-        saveArchive();
-        renderArchiveList();
-      }
-    });
-    
-    item.appendChild(icon);
-    item.appendChild(content);
-    item.appendChild(restoreBtn);
-    item.appendChild(deleteBtn);
-    
-    list.appendChild(item);
+    row.append(icon, copy, restore, del);
+    root.appendChild(row);
   });
 }
 
 function restoreCard(cardId) {
-  const idx = archive.findIndex(c => c.id === cardId);
-  if (idx === -1) return;
-  const card = archive.splice(idx, 1)[0];
-  
-  let colExists = board.columns.some(c => c.id === card.columnId);
-  if (!colExists) {
-    card.columnId = board.columns[0]?.id || '';
-  }
-  
-  const colCards = getCardsForColumn(card.columnId);
-  card.order = colCards.length;
+  const index = archive.findIndex(card => card.id === cardId);
+  if (index < 0) return;
+  const [card] = archive.splice(index, 1);
+  delete card.archivedAt;
+  if (!board.columns.some(col => col.id === card.columnId)) card.columnId = preferredCaptureColumn(board).id;
+  card.order = cardsForColumn(board, card.columnId).length;
   card.updatedAt = Date.now();
-  
-  board.cards.push(card);
+  board.cards.push(normalizeCard(card));
   saveBoard();
   saveArchive();
-  renderBoard();
-  renderArchiveList();
+  renderArchive();
+  renderAll();
+  toast('Restored');
 }
 
-// ═══════════════════════════════════════════════════════════
-// QUICK CAPTURE
-// ═══════════════════════════════════════════════════════════
-function handleQuickCapture() {
-  const input = document.getElementById('quick-input');
-  const typeSelect = document.getElementById('quick-type-select');
-  const title = input.value.trim();
-  if (!title) return;
-
-  let type = typeSelect.value;
-  if (isUrl(title)) type = 'URL';
-
-  createCard(title, type, board.columns[0].id);
-  input.value = '';
-  board.meta.lastType = type;
-  saveBoard();
+function renderSettings() {
+  settings = loadSettings();
+  $('ai-base-url').value = settings.baseUrl || '';
+  $('ai-api-key').value = settings.apiKey || '';
+  $('ai-model').value = settings.model || '';
+  $('ai-status').textContent = '';
 }
 
-// ═══════════════════════════════════════════════════════════
-// TOOLBAR
-// ═══════════════════════════════════════════════════════════
-function initToolbar() {
-  // Search
-  document.getElementById('search-input').addEventListener('input', (e) => {
-    searchQuery = e.target.value;
-    renderBoard();
-  });
-
-  // Type filters
-  document.querySelectorAll('.type-filter').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.type-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      filterType = btn.dataset.type;
-      renderBoard();
-    });
-  });
-
-  // Priority filters
-  document.querySelectorAll('.priority-filter').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.priority-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      filterPriority = btn.dataset.priority;
-      renderBoard();
-    });
-  });
-
-  // Export
-  document.getElementById('export-btn').addEventListener('click', exportBoard);
-
-  // Import
-  document.getElementById('import-btn').addEventListener('click', () => {
-    document.getElementById('import-file').click();
-  });
-  document.getElementById('import-file').addEventListener('change', importBoard);
-
-  // Clear Done
-  document.getElementById('clear-done-btn').addEventListener('click', clearDone);
+function stripCodeFence(text) {
+  return String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
 }
 
-function exportBoard() {
-  const data = {
-    board: board,
-    settings: { baseUrl: settings.baseUrl, model: settings.model },
-    archive: archive,
-    exportedAt: new Date().toISOString()
+async function callAI(messages, { maxTokens = 900, json = false } = {}) {
+  persistSettings();
+  if (!settings.apiKey || !settings.baseUrl || !settings.model) throw new Error('Configure base URL, API key and model in Settings first.');
+  const endpoint = `${settings.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const body = { model: settings.model, messages, temperature: 0.2, max_tokens: maxTokens };
+  if (json) body.response_format = { type: 'json_object' };
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey}` },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).error?.message || detail; } catch { /* noop */ }
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  const payload = await response.json();
+  return payload.choices?.[0]?.message?.content || '';
+}
+
+function cardAIContext(card) {
+  const column = board.columns.find(col => col.id === card.columnId);
+  return {
+    state: column?.name || '',
+    title: card.title,
+    nextAction: card.nextAction || '',
+    blocker: card.blocker || '',
+    type: card.type,
+    priority: card.priority,
+    url: card.url || '',
+    modelOrTool: card.aiModel || '',
+    notes: card.notes || '',
+    checklist: card.subtasks || []
   };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'GeneralManager-backup.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
 }
 
-function importBoard(e) {
-  const file = e.target.files[0];
+function renderAIText(text, copyLabel = 'Copy') {
+  const root = $('ai-card-output');
+  root.classList.remove('hidden');
+  root.replaceChildren();
+  const content = document.createElement('div');
+  content.textContent = text;
+  const copy = document.createElement('button');
+  copy.className = 'btn btn-sm';
+  copy.style.marginTop = '9px';
+  copy.textContent = copyLabel;
+  copy.addEventListener('click', () => copyText(text));
+  root.append(content, copy);
+}
+
+async function runCardAI(action) {
+  const card = activeCard();
+  if (!card) return;
+  const output = $('ai-card-output');
+  output.classList.remove('hidden');
+  output.textContent = 'Thinking…';
+  const context = cardAIContext(card);
+  try {
+    if (action === 'refine') {
+      const text = await callAI([
+        { role: 'system', content: 'You refine a single work item. Return ONLY JSON with keys title, nextAction, notes, blocker, type, destination. Preserve facts; do not invent status. Keep notes compact. destination must be one of the provided states.' },
+        { role: 'user', content: `Available states: ${sortedColumns(board).map(col => col.name).join(', ')}\n\nCard:\n${JSON.stringify(context, null, 2)}` }
+      ], { json: true, maxTokens: 800 });
+      const suggestion = JSON.parse(stripCodeFence(text));
+      renderRefinePreview(suggestion);
+      return;
+    }
+    if (action === 'route') {
+      const text = await callAI([
+        { role: 'system', content: 'Choose the best workflow state for this work item. Return ONLY JSON with keys destination and reason. Do not move anything.' },
+        { role: 'user', content: `Allowed states: ${sortedColumns(board).map(col => col.name).join(', ')}\n\nCard:\n${JSON.stringify(context, null, 2)}` }
+      ], { json: true, maxTokens: 250 });
+      const suggestion = JSON.parse(stripCodeFence(text));
+      renderRoutePreview(suggestion);
+      return;
+    }
+    const prompt = action === 'resume'
+      ? 'Create a compact resume brief for this work item. Use exactly: WHERE IT STANDS, NEXT MOVE, WATCH OUT. Do not invent missing facts.'
+      : 'Create a compact handoff for another capable AI agent. Include goal, known context, current state, next action, constraints and open questions. Do not invent facts.';
+    const text = await callAI([
+      { role: 'system', content: prompt },
+      { role: 'user', content: JSON.stringify(context, null, 2) }
+    ], { maxTokens: action === 'resume' ? 500 : 900 });
+    renderAIText(text, action === 'handoff' ? 'Copy AI handoff' : 'Copy brief');
+  } catch (error) {
+    output.textContent = `AI unavailable: ${error.message}`;
+  }
+}
+
+function renderRefinePreview(suggestion) {
+  const root = $('ai-card-output');
+  root.replaceChildren();
+  const preview = document.createElement('div');
+  preview.className = 'ai-preview';
+  const keys = [['title', 'Title'], ['nextAction', 'Next'], ['destination', 'State'], ['blocker', 'Blocker'], ['type', 'Type'], ['notes', 'Notes']];
+  keys.forEach(([key, label]) => {
+    if (!suggestion[key]) return;
+    const row = document.createElement('div');
+    row.className = 'ai-preview-row';
+    const name = document.createElement('b');
+    name.textContent = label;
+    const value = document.createElement('span');
+    value.textContent = String(suggestion[key]);
+    row.append(name, value);
+    preview.appendChild(row);
+  });
+  const apply = document.createElement('button');
+  apply.className = 'btn btn-primary btn-sm';
+  apply.style.marginTop = '9px';
+  apply.textContent = 'Apply suggestion';
+  apply.addEventListener('click', () => {
+    const card = activeCard();
+    if (!card) return;
+    if (suggestion.title) card.title = String(suggestion.title).trim();
+    if (suggestion.nextAction) card.nextAction = String(suggestion.nextAction).trim();
+    if (typeof suggestion.notes === 'string') card.notes = suggestion.notes.trim();
+    if (typeof suggestion.blocker === 'string') card.blocker = suggestion.blocker.trim();
+    if (TYPES.includes(String(suggestion.type || '').toUpperCase())) card.type = String(suggestion.type).toUpperCase();
+    const destination = findColumnByName(board, suggestion.destination);
+    if (destination) moveCard(board, card.id, destination.id);
+    card.updatedAt = Date.now();
+    saveBoard();
+    renderAll();
+    openInspector(card.id);
+    toast('Suggestion applied');
+  });
+  root.append(preview, apply);
+}
+
+function renderRoutePreview(suggestion) {
+  const root = $('ai-card-output');
+  root.replaceChildren();
+  const destination = findColumnByName(board, suggestion.destination);
+  const text = document.createElement('div');
+  text.textContent = `${suggestion.destination || 'No route'}${suggestion.reason ? ` — ${suggestion.reason}` : ''}`;
+  root.appendChild(text);
+  if (destination) {
+    const move = document.createElement('button');
+    move.className = 'btn btn-primary btn-sm';
+    move.style.marginTop = '9px';
+    move.textContent = `Move to ${destination.name}`;
+    move.addEventListener('click', () => {
+      const card = activeCard();
+      if (!card) return;
+      moveCard(board, card.id, destination.id);
+      saveBoard();
+      renderAll();
+      openInspector(card.id);
+    });
+    root.appendChild(move);
+  }
+}
+
+async function testAIConnection() {
+  $('ai-status').textContent = 'Testing…';
+  try {
+    const text = await callAI([{ role: 'user', content: 'Reply with exactly: ok' }], { maxTokens: 8 });
+    $('ai-status').textContent = `Connected · ${text.trim().slice(0, 40)}`;
+  } catch (error) {
+    $('ai-status').textContent = error.message;
+  }
+}
+
+function commandActions() {
+  const actions = [
+    { icon: '＋', title: 'Capture something', sub: 'Focus the universal capture box', run: () => $('quick-input').focus() },
+    { icon: '◎', title: 'Focus view', sub: 'NOW, NEXT and WAITING', run: () => setView('focus') },
+    { icon: '▦', title: 'Board view', sub: 'Full workflow board', run: () => setView('board') },
+    { icon: '◫', title: 'Open archive', sub: `${archive.length} archived`, run: () => openOverlay('archive-overlay') },
+    { icon: '⚙', title: 'Open settings', sub: 'AI provider, import and export', run: () => openOverlay('settings-overlay') },
+    { icon: '⇩', title: 'Export workspace', sub: 'Download a JSON backup', run: exportWorkspace }
+  ];
+  const done = findColumnByName(board, 'DONE');
+  if (done && cardsForColumn(board, done.id).length) {
+    actions.push({ icon: '✓', title: 'Archive all DONE cards', sub: `${cardsForColumn(board, done.id).length} card(s)`, run: archiveDone });
+  }
+  return actions;
+}
+
+function openCommandPalette(seed = '') {
+  if (!board) return;
+  $('command-overlay').classList.remove('hidden');
+  $('command-input').value = seed;
+  commandIndex = 0;
+  renderCommandResults();
+  setTimeout(() => $('command-input').focus(), 0);
+}
+
+function closeCommandPalette() {
+  $('command-overlay').classList.add('hidden');
+}
+
+function renderCommandResults() {
+  const root = $('command-results');
+  const q = $('command-input').value.trim().toLowerCase();
+  const actionItems = commandActions().filter(item => !q || `${item.title} ${item.sub}`.toLowerCase().includes(q));
+  const cardItems = board.cards
+    .filter(card => !q || cardMatches(card, { query: q }))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, q ? 12 : 6)
+    .map(card => {
+      const col = board.columns.find(column => column.id === card.columnId);
+      return { icon: TYPE_ICONS[card.type] || '•', title: card.title, sub: `${col?.name || ''}${card.nextAction ? ` · ${card.nextAction}` : ''}`, run: () => openInspector(card.id) };
+    });
+  commandItems = [...actionItems, ...cardItems];
+  if (commandIndex >= commandItems.length) commandIndex = 0;
+  root.innerHTML = '';
+  commandItems.forEach((item, index) => {
+    const button = document.createElement('button');
+    button.className = `command-result${index === commandIndex ? ' active' : ''}`;
+    const icon = document.createElement('span');
+    icon.className = 'command-icon';
+    icon.textContent = item.icon;
+    const copy = document.createElement('span');
+    copy.className = 'command-copy';
+    const title = document.createElement('div');
+    title.className = 'command-title';
+    title.textContent = item.title;
+    const sub = document.createElement('div');
+    sub.className = 'command-sub';
+    sub.textContent = item.sub || '';
+    copy.append(title, sub);
+    button.append(icon, copy);
+    button.addEventListener('mouseenter', () => { commandIndex = index; renderCommandResults(); });
+    button.addEventListener('click', () => runCommand(index));
+    root.appendChild(button);
+  });
+  if (!commandItems.length) {
+    const empty = document.createElement('div');
+    empty.className = 'focus-empty';
+    empty.textContent = 'No matching actions or cards.';
+    root.appendChild(empty);
+  }
+}
+
+function runCommand(index = commandIndex) {
+  const item = commandItems[index];
+  if (!item) return;
+  closeCommandPalette();
+  item.run();
+}
+
+function exportWorkspace() {
+  if (!board) return;
+  const payload = { board, archive, settings: { baseUrl: settings.baseUrl, model: settings.model }, exportedAt: new Date().toISOString(), version: 2 };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `GeneralManager-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  toast('Backup exported');
+}
+
+function importWorkspace(event) {
+  const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(ev) {
+  reader.onload = () => {
     try {
-      const data = JSON.parse(ev.target.result);
-      if (!data.board || !data.board.columns || !data.board.cards) {
-        alert('Invalid GeneralManager backup file.');
-        return;
-      }
-      const mode = confirm('Click OK to REPLACE your board, or Cancel to MERGE with existing data.');
-      if (mode) {
-        // Replace
-        board = data.board;
-        if (data.archive) archive = data.archive;
+      const data = JSON.parse(reader.result);
+      if (!data.board?.columns || !data.board?.cards) throw new Error('Not a GeneralManager backup.');
+      const replace = confirm('OK = replace this workspace. Cancel = merge the backup into it.');
+      if (replace) {
+        board = normalizeBoard(data.board);
+        archive = Array.isArray(data.archive) ? data.archive.map(normalizeCard) : [];
       } else {
-        // Merge
-        const existingColNames = new Set(board.columns.map(c => c.name));
-        for (const col of data.board.columns) {
-          if (!existingColNames.has(col.name)) {
-            col.order = board.columns.length;
-            board.columns.push(col);
-            existingColNames.add(col.name);
-          }
-        }
-        const existingCardIds = new Set(board.cards.map(c => c.id));
-        for (const card of data.board.cards) {
-          if (!existingCardIds.has(card.id)) {
-            // Map to existing column by name
-            const srcCol = data.board.columns.find(c => c.id === card.columnId);
-            if (srcCol) {
-              const destCol = board.columns.find(c => c.name === srcCol.name);
-              if (destCol) card.columnId = destCol.id;
-              else card.columnId = board.columns[0].id;
-            }
-            board.cards.push(card);
-          }
-        }
-        if (data.archive) {
-          const existingArchiveIds = new Set(archive.map(c => c.id));
-          for (const ac of data.archive) {
-            if (!existingArchiveIds.has(ac.id)) archive.push(ac);
-          }
-        }
+        mergeImportedBoard(normalizeBoard(data.board), Array.isArray(data.archive) ? data.archive : []);
       }
-      saveBoardImmediate();
-      saveArchiveImmediate();
-      renderBoard();
-      document.getElementById('board-title').value = board.meta.boardTitle;
-    } catch (err) {
-      alert('Failed to parse JSON: ' + err.message);
+      saveBoard(true);
+      saveArchive(true);
+      closeOverlay('settings-overlay');
+      renderAll();
+      toast(replace ? 'Workspace replaced' : 'Backup merged');
+    } catch (error) {
+      alert(`Import failed: ${error.message}`);
     }
+    event.target.value = '';
   };
   reader.readAsText(file);
-  e.target.value = '';
 }
 
-function clearDone() {
-  const doneCols = board.columns.filter(c => c.name.toUpperCase() === 'DONE');
-  let moved = 0;
-  for (const col of doneCols) {
-    const doneCards = board.cards.filter(c => c.columnId === col.id);
-    for (const card of doneCards) {
-      archive.push(card);
-      moved++;
+function mergeImportedBoard(imported, importedArchive) {
+  const columnsByName = new Map(sortedColumns(board).map(col => [col.name.toUpperCase(), col]));
+  const importedMap = new Map();
+  sortedColumns(imported).forEach(source => {
+    let destination = columnsByName.get(source.name.toUpperCase());
+    if (!destination) {
+      destination = { id: makeId(), name: source.name, order: board.columns.length, color: source.color };
+      board.columns.push(destination);
+      columnsByName.set(destination.name.toUpperCase(), destination);
     }
-    board.cards = board.cards.filter(c => c.columnId !== col.id);
-  }
-  if (moved > 0) {
-    saveArchiveImmediate();
-    saveBoardImmediate();
-    renderBoard();
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// AI PANEL
-// ═══════════════════════════════════════════════════════════
-function initAIPanel() {
-  // Toggle
-  document.getElementById('ai-toggle-btn').addEventListener('click', toggleAIPanel);
-  document.getElementById('ai-close-btn').addEventListener('click', toggleAIPanel);
-
-  // Presets
-  document.querySelectorAll('.ai-preset').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.getElementById('ai-base-url').value = btn.dataset.url;
-      saveSettings();
-    });
+    importedMap.set(source.id, destination.id);
   });
-
-  // API key toggle
-  document.getElementById('api-key-toggle').addEventListener('click', () => {
-    const input = document.getElementById('ai-api-key');
-    input.type = input.type === 'password' ? 'text' : 'password';
+  const existingIds = new Set(board.cards.map(card => card.id));
+  imported.cards.forEach(raw => {
+    const card = normalizeCard(raw);
+    if (existingIds.has(card.id)) card.id = makeId();
+    card.columnId = importedMap.get(card.columnId) || preferredCaptureColumn(board).id;
+    card.order = cardsForColumn(board, card.columnId).length;
+    board.cards.push(card);
+    existingIds.add(card.id);
   });
-
-  // Save settings on change
-  ['ai-base-url', 'ai-api-key', 'ai-model'].forEach(id => {
-    document.getElementById(id).addEventListener('change', saveSettings);
-    document.getElementById(id).addEventListener('blur', saveSettings);
-  });
-
-  // Test connection
-  document.getElementById('ai-test-btn').addEventListener('click', testConnection);
-
-  // AI Actions
-  document.querySelectorAll('.ai-action-btn').forEach(btn => {
-    btn.addEventListener('click', () => handleAIAction(btn.dataset.action));
-  });
-
-  // Custom prompt
-  document.getElementById('ai-ask-btn').addEventListener('click', () => {
-    const text = document.getElementById('ai-custom-input').value.trim();
-    if (!text) return;
-    handleAIAction('custom', text);
-  });
-
-  // Load settings into fields
-  document.getElementById('ai-base-url').value = settings.baseUrl || '';
-  document.getElementById('ai-api-key').value = settings.apiKey || '';
-  document.getElementById('ai-model').value = settings.model || '';
-}
-
-function toggleAIPanel() {
-  document.getElementById('ai-panel').classList.toggle('visible');
-}
-
-function getBoardContext() {
-  const cols = board.columns.sort((a, b) => a.order - b.order);
-  const context = cols.map(col => ({
-    column: col.name,
-    cards: getCardsForColumn(col.id).map(c => ({
-      title: c.title,
-      type: c.type,
-      priority: c.priority,
-      url: c.url || undefined,
-      notes: c.notes ? c.notes.substring(0, 100) : undefined,
-      aiModel: c.aiModel || undefined
-    }))
-  }));
-  return JSON.stringify(context, null, 2);
-}
-
-const AI_PROMPTS = {
-  summarize: 'Summarize what this person is working on across all columns in 3-5 sentences.',
-  priority: 'Based on ACTIVE and BACKLOG cards, return the top 3 to focus on next. For each: card title + one sentence reason. Be direct.',
-  stalled: 'Identify ACTIVE cards with no notes and no URL. These are likely stalled. List them and suggest one unblocking action each.',
-  standup: 'Generate a standup: Yesterday (DONE cards), Today (ACTIVE), Blockers (PARKED). One tight paragraph.'
-};
-
-async function testConnection() {
-  saveSettings();
-  const status = document.getElementById('ai-status');
-  if (!settings.apiKey) {
-    status.className = 'ai-status visible error';
-    status.textContent = '❌ Configure API key first';
-    return;
-  }
-  status.className = 'ai-status visible';
-  status.style.background = 'var(--bg-input)';
-  status.style.color = 'var(--text-muted)';
-  status.textContent = '🔌 Testing…';
-
-  try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + settings.apiKey
-      },
-      body: JSON.stringify({
-        model: settings.model || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: 'Say "ok"' }],
-        max_tokens: 5
-      })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const model = data.model || settings.model || 'unknown';
-      status.className = 'ai-status visible success';
-      status.textContent = '✓ Connected — ' + model;
-    } else {
-      let errMsg = res.status + ': ';
-      try {
-        const errData = await res.json();
-        errMsg += errData.error?.message || res.statusText;
-      } catch (e) {
-        errMsg += res.statusText;
-      }
-      status.className = 'ai-status visible error';
-      status.textContent = '❌ ' + errMsg;
-    }
-  } catch (err) {
-    status.className = 'ai-status visible error';
-    status.textContent = '❌ Network error: ' + err.message;
-  }
-}
-
-async function handleAIAction(action, customText) {
-  saveSettings();
-  const responsePane = document.getElementById('ai-response');
-  responsePane.classList.add('visible');
-
-  if (!settings.apiKey) {
-    responsePane.innerHTML = '<span class="thinking">Configure API key in Settings first</span>';
-    return;
-  }
-
-  const prompt = action === 'custom' ? customText : AI_PROMPTS[action];
-  const boardContext = getBoardContext();
-
-  const messages = [
-    { role: 'system', content: 'You are an AI assistant helping a power user manage their tasks and context. Respond concisely and actionably.' },
-    { role: 'user', content: prompt + '\n\nBoard state:\n' + boardContext }
-  ];
-
-  responsePane.innerHTML = '<span class="thinking">Thinking…</span>';
-
-  try {
-    const res = await fetch(settings.baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + settings.apiKey
-      },
-      body: JSON.stringify({
-        model: settings.model || 'gpt-4o-mini',
-        messages: messages,
-        stream: true
-      })
-    });
-
-    if (!res.ok) {
-      let errMsg = '';
-      try {
-        const errData = await res.json();
-        errMsg = errData.error?.message || res.statusText;
-      } catch (e) {
-        errMsg = res.statusText;
-      }
-      responsePane.innerHTML = '<span style="color:var(--priority-high)">❌ ' + res.status + ': ' + escapeHtml(errMsg) + '</span>';
-      return;
-    }
-
-    const contentType = res.headers.get('content-type') || '';
-
-    if (contentType.includes('text/event-stream') || contentType.includes('application/x-ndjson') || contentType.includes('text/plain') || contentType.includes('application/octet-stream')) {
-      // Streaming SSE
-      responsePane.textContent = '';
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === 'data: [DONE]') continue;
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              const delta = json.choices?.[0]?.delta?.content;
-              if (delta) responsePane.textContent += delta;
-            } catch (e) { /* skip malformed chunk */ }
-          }
-        }
-        responsePane.scrollTop = responsePane.scrollHeight;
-      }
-      if (!responsePane.textContent) responsePane.textContent = '(No response content)';
-    } else {
-      // Non-streaming JSON fallback
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content || '(No response content)';
-      responsePane.textContent = content;
-    }
-  } catch (err) {
-    responsePane.innerHTML = '<span style="color:var(--priority-high)">❌ Error: ' + escapeHtml(err.message) + '</span>';
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// KEYBOARD SHORTCUTS
-// ═══════════════════════════════════════════════════════════
-function initKeyboard() {
-  document.addEventListener('keydown', (e) => {
-    // Close modal on Escape
-    if (e.key === 'Escape') {
-      if (modalOpen) { closeModal(); return; }
-      if (archiveModalOpen) { closeArchiveModal(); return; }
-      hideContextMenu();
-      return;
-    }
-
-    // Don't trigger shortcuts when typing in inputs
-    const tag = document.activeElement.tagName;
-    const isEditable = document.activeElement.contentEditable === 'true';
-    const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable;
-
-    if (e.key === '/' && !isInput && !modalOpen && !archiveModalOpen) {
-      e.preventDefault();
-      document.getElementById('quick-input').focus();
-      return;
-    }
-
-    if ((e.key === 'a' || e.key === 'A') && !isInput && !modalOpen && !archiveModalOpen && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      toggleAIPanel();
-      return;
-    }
+  const archiveIds = new Set(archive.map(card => card.id));
+  importedArchive.forEach(raw => {
+    const card = normalizeCard(raw);
+    if (archiveIds.has(card.id)) card.id = makeId();
+    archive.push(card);
+    archiveIds.add(card.id);
   });
 }
 
-// ═══════════════════════════════════════════════════════════
-// GLOBAL CLICK HANDLERS
-// ═══════════════════════════════════════════════════════════
-function initGlobalEvents() {
-  // Close context menu on click outside
-  document.addEventListener('click', (e) => {
-    const menu = document.getElementById('context-menu');
-    if (menu && menu.classList.contains('visible') && !menu.contains(e.target)) {
-      hideContextMenu();
-    }
-  });
-
-  // Close modal on overlay click
-  document.getElementById('modal-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('modal-overlay')) closeModal();
-  });
-
-  // Modal buttons
-  document.getElementById('modal-close').addEventListener('click', closeModal);
-  document.getElementById('modal-save-btn').addEventListener('click', saveModal);
-  document.getElementById('modal-delete-btn').addEventListener('click', () => {
-    if (activeModalCardId && confirm('Delete this card?')) {
-      deleteCard(activeModalCardId);
-      closeModal();
-    }
-  });
-  document.getElementById('modal-archive-btn').addEventListener('click', () => {
-    if (activeModalCardId) {
-      archiveCard(activeModalCardId);
-      closeModal();
-    }
-  });
-
-  // Checklist: add subtask button
-  document.getElementById('add-subtask-btn').addEventListener('click', () => {
-    const input = document.getElementById('new-subtask-input');
-    const text = input.value.trim();
-    if (!text) return;
-    activeModalSubtasks.push({
-      id: crypto.randomUUID(),
-      text: text,
-      done: false
-    });
-    input.value = '';
-    renderChecklist(activeModalSubtasks);
-  });
-  document.getElementById('new-subtask-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      document.getElementById('add-subtask-btn').click();
-    }
-  });
-
-  // Archive view modal toggles & controls
-  document.getElementById('archive-view-btn').addEventListener('click', openArchiveModal);
-  document.getElementById('archive-close').addEventListener('click', closeArchiveModal);
-  document.getElementById('archive-modal-close-btn').addEventListener('click', closeArchiveModal);
-  document.getElementById('archive-overlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('archive-overlay')) closeArchiveModal();
-  });
-  document.getElementById('archive-search-input').addEventListener('input', (e) => {
-    archiveSearchQuery = e.target.value;
-    renderArchiveList();
-  });
-  document.getElementById('archive-empty-btn').addEventListener('click', () => {
-    if (archive.length > 0 && confirm('Permanently delete all archived cards? This cannot be undone.')) {
-      archive = [];
-      saveArchiveImmediate();
-      renderArchiveList();
-    }
-  });
-
-  // Quick Capture
-  document.getElementById('quick-add-btn').addEventListener('click', handleQuickCapture);
-  document.getElementById('quick-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleQuickCapture();
-    }
-  });
-
-  // URL auto-detect in quick input
-  document.getElementById('quick-input').addEventListener('input', (e) => {
-    const val = e.target.value.trim();
-    if (isUrl(val)) {
-      document.getElementById('quick-type-select').value = 'URL';
-    }
-  });
-
-  // Board title save on blur
-  document.getElementById('board-title').addEventListener('blur', saveBoard);
-  document.getElementById('board-title').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-  });
-
-  // Logout button
-  document.getElementById('logout-btn').addEventListener('click', () => {
-    if (confirm('Sign out of your account?')) {
-      signOutUser();
-    }
-  });
+function archiveDone() {
+  const done = findColumnByName(board, 'DONE');
+  if (!done) return;
+  const cards = cardsForColumn(board, done.id);
+  cards.forEach(card => archiveCardCore(board, archive, card.id));
+  saveBoard(true);
+  saveArchive(true);
+  renderAll();
+  toast(`${cards.length} DONE card(s) archived`);
 }
 
-// ═══════════════════════════════════════════════════════════
-// INITIALIZATION AND LIFECYCLE
-// ═══════════════════════════════════════════════════════════
-function initAppUI() {
-  document.getElementById('board-title').value = board.meta.boardTitle || 'GeneralManager';
-
-  // Set last-used type
-  if (board.meta.lastType) {
-    document.getElementById('quick-type-select').value = board.meta.lastType;
-  }
-
+function renderAll() {
+  if (!board) return;
+  $('board-title').value = board.meta.boardTitle || 'GeneralManager';
+  $('quick-type-select').value = TYPES.includes(board.meta.lastType) ? board.meta.lastType : 'NOTE';
+  populateDestinationSelects();
+  renderFocus();
   renderBoard();
-
-  if (!listenersInitialized) {
-    initToolbar();
-    initAIPanel();
-    initKeyboard();
-    initGlobalEvents();
-    listenersInitialized = true;
-  }
+  setView(board.meta.preferredView || 'focus', false);
 }
 
-// Wire up auth state change to app state mapping
-onUserChanged(async (user) => {
+function wireStaticListeners() {
+  if (listenersReady) return;
+  listenersReady = true;
+
+  $$('.view-btn').forEach(btn => btn.addEventListener('click', () => setView(btn.dataset.view)));
+  $('quick-add-btn').addEventListener('click', handleQuickCapture);
+  $('quick-input').addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); handleQuickCapture(); }
+  });
+  $('quick-input').addEventListener('input', event => {
+    if (isUrl(event.target.value)) $('quick-type-select').value = 'URL';
+  });
+  $('quick-type-select').addEventListener('change', event => { if (board) { board.meta.lastType = event.target.value; saveBoard(); } });
+  $('quick-destination').addEventListener('change', event => {
+    if (!board) return;
+    const col = board.columns.find(item => item.id === event.target.value);
+    if (col) board.meta.lastDestinationName = col.name;
+    saveBoard();
+  });
+
+  $('search-input').addEventListener('input', event => {
+    searchQuery = event.target.value;
+    renderFocus();
+    renderBoard();
+  });
+  $('search-input').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target.value.trim()) openCommandPalette(event.target.value.trim());
+  });
+  $('board-title').addEventListener('input', () => saveBoard());
+  $('board-title').addEventListener('keydown', event => { if (event.key === 'Enter') event.target.blur(); });
+
+  $('settings-btn').addEventListener('click', () => openOverlay('settings-overlay'));
+  $('archive-btn').addEventListener('click', () => openOverlay('archive-overlay'));
+  $('archive-search').addEventListener('input', renderArchive);
+  $('empty-archive-btn').addEventListener('click', () => {
+    if (!archive.length || !confirm('Permanently delete the entire archive?')) return;
+    archive = [];
+    saveArchive(true);
+    renderArchive();
+  });
+  $$('[data-close-overlay]').forEach(btn => btn.addEventListener('click', () => closeOverlay(btn.dataset.closeOverlay)));
+  $$('.overlay').forEach(overlay => overlay.addEventListener('mousedown', event => {
+    if (event.target === overlay) overlay.classList.add('hidden');
+  }));
+
+  $$('[data-ai-preset]').forEach(btn => btn.addEventListener('click', () => {
+    $('ai-base-url').value = btn.dataset.aiPreset;
+    persistSettings();
+  }));
+  ['ai-base-url', 'ai-api-key', 'ai-model'].forEach(id => $(id).addEventListener('change', persistSettings));
+  $('ai-test-btn').addEventListener('click', testAIConnection);
+  $('export-btn').addEventListener('click', exportWorkspace);
+  $('import-btn').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', importWorkspace);
+
+  $('inspector-close').addEventListener('click', closeInspector);
+  $('inspector-backdrop').addEventListener('click', closeInspector);
+  $('copy-handoff-btn').addEventListener('click', () => copyCardHandoff());
+  $('duplicate-card-btn').addEventListener('click', () => {
+    const card = activeCard();
+    if (!card) return;
+    const copy = duplicateCard(board, card.id);
+    saveBoard();
+    renderAll();
+    if (copy) openInspector(copy.id);
+  });
+  $('archive-card-btn').addEventListener('click', () => archiveCard());
+  $('delete-card-btn').addEventListener('click', () => deleteCard());
+
+  const fieldBindings = [
+    ['card-title', 'title'], ['card-next-action', 'nextAction'], ['card-priority', 'priority'],
+    ['card-type', 'type'], ['card-ai-model', 'aiModel'], ['card-url', 'url'], ['card-blocker', 'blocker'], ['card-notes', 'notes']
+  ];
+  fieldBindings.forEach(([id, field]) => {
+    const eventName = ['card-priority', 'card-type'].includes(id) ? 'change' : 'input';
+    $(id).addEventListener(eventName, event => syncInspectorField(field, event.target.value));
+  });
+  $('card-column').addEventListener('change', event => syncInspectorField('columnId', event.target.value));
+  $('check-add-btn').addEventListener('click', addChecklistItem);
+  $('check-input').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addChecklistItem(); } });
+  $$('[data-ai-action]').forEach(btn => btn.addEventListener('click', () => runCardAI(btn.dataset.aiAction)));
+
+  $('command-input').addEventListener('input', () => { commandIndex = 0; renderCommandResults(); });
+  $('command-input').addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); commandIndex = Math.min(commandItems.length - 1, commandIndex + 1); renderCommandResults(); }
+    if (event.key === 'ArrowUp') { event.preventDefault(); commandIndex = Math.max(0, commandIndex - 1); renderCommandResults(); }
+    if (event.key === 'Enter') { event.preventDefault(); runCommand(); }
+    if (event.key === 'Escape') closeCommandPalette();
+  });
+
+  document.addEventListener('click', event => {
+    if (!$('context-menu').contains(event.target)) hideContextMenu();
+  });
+  document.addEventListener('keydown', event => {
+    const target = event.target;
+    const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      openCommandPalette();
+      return;
+    }
+    if (event.key === 'Escape') {
+      hideContextMenu();
+      if (!$('command-overlay').classList.contains('hidden')) closeCommandPalette();
+      else if (!$('inspector').classList.contains('hidden')) closeInspector();
+      else $$('.overlay:not(.hidden)').forEach(node => node.classList.add('hidden'));
+      return;
+    }
+    if (!typing && event.key === '/') { event.preventDefault(); $('quick-input').focus(); }
+    if (!typing && event.key.toLowerCase() === 'f') setView('focus');
+    if (!typing && event.key.toLowerCase() === 'b') setView('board');
+  });
+
+  $('logout-btn').addEventListener('click', () => {
+    if (confirm('Sign out?')) window.signOutUser?.();
+  });
+}
+
+wireStaticListeners();
+
+window.onUserChanged?.(async user => {
   currentUser = user;
-  if (user) {
-    // Show email and logout button
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) {
-      emailEl.textContent = user.email;
-      emailEl.title = user.email;
-    }
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) {
-      profileEl.style.display = 'flex';
-    }
-
-    // Load settings from localStorage (remains local)
-    loadSettings();
-
-    try {
-      const data = await loadUserData(user.uid);
-      if (data.board) {
-        board = data.board;
-        archive = data.archive || [];
-      } else {
-        // No board in Firestore. Check for migration
-        if (hasLocalStorageData()) {
-          showMigrationBanner(user.uid, (migratedBoard, migratedArchive) => {
-            board = migratedBoard;
-            archive = migratedArchive;
-            initAppUI();
-          }, () => {
-            // Dismissed / skip migration
-            board = createDefaultBoard();
-            archive = [];
-            saveBoardImmediate();
-            saveArchiveImmediate();
-            initAppUI();
-          });
-          return; // Wait for banner interaction
-        } else {
-          // Fresh board
-          board = createDefaultBoard();
-          archive = [];
-          await Promise.all([
-            saveUserBoardImmediate(user.uid, board),
-            saveUserArchiveImmediate(user.uid, archive)
-          ]);
-        }
-      }
-      initAppUI();
-    } catch (err) {
-      console.error("Error loading user workspace:", err);
-      // Fallback
-      board = createDefaultBoard();
-      archive = [];
-      initAppUI();
-    }
-  } else {
-    // Logged out
+  if (!user) {
     board = null;
     archive = [];
-    const emailEl = document.getElementById('user-email');
-    if (emailEl) emailEl.textContent = '';
-    const profileEl = document.getElementById('user-profile');
-    if (profileEl) profileEl.style.display = 'none';
-    const container = document.getElementById('board-container');
-    if (container) container.innerHTML = '';
+    activeCardId = null;
+    $('user-profile').style.display = 'none';
+    $('focus-view').innerHTML = '';
+    $('board-container').innerHTML = '';
+    closeInspector();
+    return;
+  }
+
+  $('user-email').textContent = user.email || '';
+  $('user-email').title = user.email || '';
+  $('user-profile').style.display = 'flex';
+  settings = loadSettings();
+
+  const startWorkspace = (rawBoard, rawArchive = []) => {
+    board = normalizeBoard(rawBoard || createDefaultBoard());
+    archive = Array.isArray(rawArchive) ? rawArchive.map(card => ({ ...normalizeCard(card), archivedAt: card.archivedAt })) : [];
+    renderAll();
+  };
+
+  try {
+    const data = await window.loadUserData(user.uid);
+    if (data.board) {
+      startWorkspace(data.board, data.archive || []);
+      return;
+    }
+
+    if (window.hasLocalStorageData?.()) {
+      window.showMigrationBanner?.(user.uid, (migratedBoard, migratedArchive) => {
+        startWorkspace(migratedBoard, migratedArchive);
+        saveBoard(true);
+        saveArchive(true);
+      }, () => {
+        startWorkspace(createDefaultBoard(), []);
+        saveBoard(true);
+        saveArchive(true);
+      });
+      return;
+    }
+
+    startWorkspace(createDefaultBoard(), []);
+    await Promise.all([
+      window.saveUserBoardImmediate(user.uid, board),
+      window.saveUserArchiveImmediate(user.uid, archive)
+    ]);
+  } catch (error) {
+    console.error('Failed to load GeneralManager workspace:', error);
+    startWorkspace(createDefaultBoard(), []);
+    toast('Could not load cloud data. Showing a temporary empty workspace.');
   }
 });
