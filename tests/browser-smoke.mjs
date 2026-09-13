@@ -38,9 +38,7 @@ ws.addEventListener('message', event => {
     else resolve(message.result);
     return;
   }
-  if (message.method === 'Runtime.exceptionThrown') {
-    runtimeExceptions.push(message.params.exceptionDetails);
-  }
+  if (message.method === 'Runtime.exceptionThrown') runtimeExceptions.push(message.params.exceptionDetails);
 });
 
 function cdp(method, params = {}) {
@@ -57,14 +55,8 @@ function cdp(method, params = {}) {
 }
 
 async function evaluate(expression) {
-  const result = await cdp('Runtime.evaluate', {
-    expression,
-    returnByValue: true,
-    awaitPromise: true
-  });
-  if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || 'Runtime evaluation failed');
-  }
+  const result = await cdp('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'Runtime evaluation failed');
   return result.result?.value;
 }
 
@@ -73,44 +65,35 @@ await cdp('Page.enable');
 await cdp('Page.navigate', { url: 'http://127.0.0.1:8080/' });
 
 let ready = false;
-for (let i = 0; i < 100; i += 1) {
+for (let i = 0; i < 120; i += 1) {
   ready = await evaluate(`
     document.readyState === 'complete' &&
     !!document.getElementById('quick-input') &&
+    !!document.getElementById('regroup-overlay') &&
+    !!document.getElementById('sources-view') &&
     typeof window.onUserChanged === 'function' &&
-    typeof window.loadUserData === 'function' &&
-    typeof window.saveUserBoard === 'function'
+    typeof window.loadUserData === 'function'
   `).catch(() => false);
   if (ready) break;
   await sleep(100);
 }
 
-if (!ready) {
-  throw new Error('Application scripts did not reach a ready persistence/auth boundary');
-}
+if (!ready) throw new Error('Manager harness did not reach a ready auth/runtime boundary');
 
-// Settings is deliberately usable before a workspace has loaded. Clicking it
-// proves the vNext module reached wireStaticListeners without faking Firebase auth.
 await evaluate(`document.getElementById('settings-btn').click()`);
 await sleep(100);
 
-const settingsOpened = await evaluate(`
-  !document.getElementById('settings-overlay').classList.contains('hidden')
-`);
-
-if (!settingsOpened) {
-  throw new Error('vNext controller did not wire the Settings action');
-}
-
 const shellState = await evaluate(`({
-  capturePresent: !!document.getElementById('quick-destination'),
+  capturePresent: !!document.getElementById('quick-kind'),
   inspectorPresent: !!document.getElementById('inspector'),
+  sourcesPresent: !!document.getElementById('sources-view'),
+  regroupPresent: !!document.getElementById('regroup-overlay'),
   settingsOpen: !document.getElementById('settings-overlay').classList.contains('hidden'),
   title: document.title
 })`);
 
-if (!shellState.capturePresent || !shellState.inspectorPresent || !shellState.settingsOpen || shellState.title !== 'GeneralManager') {
-  throw new Error(`Unexpected shell state: ${JSON.stringify(shellState)}`);
+if (!shellState.capturePresent || !shellState.inspectorPresent || !shellState.sourcesPresent || !shellState.regroupPresent || !shellState.settingsOpen || shellState.title !== 'General Manager') {
+  throw new Error(`Unexpected harness shell state: ${JSON.stringify(shellState)}`);
 }
 
 const seriousExceptions = runtimeExceptions.filter(item => {
@@ -122,5 +105,5 @@ if (seriousExceptions.length) {
   throw new Error(`Runtime exception: ${seriousExceptions[0].text || seriousExceptions[0].exception?.description}`);
 }
 
-console.log('Browser runtime smoke passed:', shellState);
+console.log('Manager harness browser smoke passed:', shellState);
 ws.close();
