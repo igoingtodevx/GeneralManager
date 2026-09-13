@@ -2,6 +2,10 @@
 // The life-harness experiment intentionally uses a separate Firestore document.
 // This keeps the production v2 board readable while the v3 data model evolves.
 
+function database() {
+  return window.firebase.firestore();
+}
+
 function harnessDebounce(fn, delay) {
   let timer = null;
   return (...args) => {
@@ -11,15 +15,15 @@ function harnessDebounce(fn, delay) {
   };
 }
 
-async function loadUserHarness(userId) {
-  const ref = db.collection('users').doc(userId).collection('data').doc('harness-v3');
+export async function loadUserHarness(userId) {
+  const ref = database().collection('users').doc(userId).collection('data').doc('harness-v3');
   const snap = await ref.get();
   return snap.exists ? snap.data() : null;
 }
 
-async function saveUserHarnessImmediate(userId, workspace) {
+export async function saveUserHarnessImmediate(userId, workspace) {
   try {
-    const ref = db.collection('users').doc(userId).collection('data').doc('harness-v3');
+    const ref = database().collection('users').doc(userId).collection('data').doc('harness-v3');
     await ref.set(workspace);
     window.showSaveIndicator?.('saved');
   } catch (error) {
@@ -29,10 +33,4 @@ async function saveUserHarnessImmediate(userId, workspace) {
   }
 }
 
-const saveUserHarness = harnessDebounce(saveUserHarnessImmediate, 700);
-
-Object.assign(window, {
-  loadUserHarness,
-  saveUserHarnessImmediate,
-  saveUserHarness
-});
+export const saveUserHarness = harnessDebounce(saveUserHarnessImmediate, 700);
