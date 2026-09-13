@@ -1248,7 +1248,7 @@ body {
       <div class="ai-panel-header">
         <span>🧠</span>
         <h3>AI Assistant</h3>
-        <button class="btn-icon" id="ai-close-btn" title="Close AI panel">✕</button>
+        <button class="btn-icon" id="ai-close-btn" title="Close AI panel" aria-label="Close AI panel">✕</button>
       </div>
       <div class="ai-panel-body">
         <!-- Config -->
@@ -1269,7 +1269,7 @@ body {
             <label>API Key</label>
             <div class="api-key-wrapper">
               <input type="password" id="ai-api-key" placeholder="sk-…" spellcheck="false" autocomplete="off">
-              <button class="api-key-toggle" id="api-key-toggle" type="button" title="Toggle visibility">👁</button>
+              <button class="api-key-toggle" id="api-key-toggle" type="button" title="Toggle visibility" aria-label="Toggle API key visibility">👁</button>
             </div>
           </div>
           <div class="ai-field">
@@ -1314,13 +1314,13 @@ body {
 
 <!-- Archive Modal Overlay -->
 <div id="archive-overlay" style="position:fixed; inset:0; background:rgba(0,0,0,0.7); backdrop-filter:blur(6px); z-index:550; display:none; align-items:center; justify-content:center;">
-  <div id="archive-modal" style="background:rgba(18, 18, 28, 0.97); border:1px solid rgba(255, 255, 255, 0.08); border-radius:12px; width:600px; max-height:80vh; box-shadow:0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(124,58,237,0.12); padding:24px; display:flex; flex-direction:column;">
+  <div id="archive-modal" role="dialog" aria-modal="true" aria-labelledby="archive-title" style="background:rgba(18, 18, 28, 0.97); border:1px solid rgba(255, 255,255,0.08); border-radius:12px; width:600px; max-height:80vh; box-shadow:0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(124,58,237,0.12); padding:24px; display:flex; flex-direction:column;">
     <div class="modal-title-row" style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
-      <h3 style="font-size:18px; font-weight:700; flex:1;">📦 Archived Cards</h3>
-      <button class="btn-icon" id="archive-close" style="font-size:20px;">✕</button>
+      <h3 id="archive-title" style="font-size:18px; font-weight:700; flex:1;">📦 Archived Cards</h3>
+      <button class="btn-icon" id="archive-close" style="font-size:20px;" aria-label="Close archive">✕</button>
     </div>
     <div style="margin-bottom:16px;">
-      <input type="text" id="archive-search-input" placeholder="Search archive…" spellcheck="false" style="width:100%; background:var(--bg-input); border:1px solid var(--border-color); border-radius:var(--radius); padding:8px 12px; color:var(--text-primary); transition:border-color var(--transition);">
+      <input type="text" id="archive-search-input" placeholder="Search archive…" spellcheck="false" aria-label="Search archive" style="width:100%; background:var(--bg-input); border:1px solid var(--border-color); border-radius:var(--radius); padding:8px 12px; color:var(--text-primary); transition:border-color var(--transition);">
     </div>
     <div id="archive-items-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:200px; max-height:45vh; padding-right:4px;">
       <!-- Archived cards rendered here -->
@@ -1337,7 +1337,7 @@ body {
   <div id="modal" role="dialog" aria-modal="true" aria-label="Edit card">
     <div class="modal-title-row">
       <input type="text" id="modal-title" placeholder="Card title" spellcheck="false">
-      <button class="btn-icon" id="modal-close">✕</button>
+      <button class="btn-icon" id="modal-close" aria-label="Close card editor">✕</button>
     </div>
     <div class="modal-row">
       <div class="modal-field">

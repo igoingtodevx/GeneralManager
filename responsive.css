@@ -1,4 +1,5 @@
 /* Deliberately scoped overrides: existing desktop visual language is retained. */
+html body { display: flex; flex-direction: column; }
 html body #app { min-width: 0; height: 100dvh; }
 html body #board-container { min-width: 0; }
 html body .column { min-width: 260px; }
@@ -13,7 +14,7 @@ html body #save-indicator.error { color: #fca5a5; }
 html body #save-indicator.saving { color: #c4b5fd; }
 html body .privacy-note { font-size: 12px; line-height: 1.6; color: #a9a9bf; margin-bottom: 12px; }
 #demo-banner { padding: 10px 20px; font-size: 12px; background: #201b33; border-bottom: 1px solid #49405c; }
-#demo-banner:not([hidden]) + #app { height: calc(100dvh - 42px); }
+#demo-banner:not([hidden]) + #app { flex: 1; min-height: 0; height: auto; }
 #migration-banner, #workspace-load-error { position: fixed; inset: 20% 12px auto; margin: auto; max-width: 620px; z-index: 2500; background: #191925; border: 1px solid #504164; padding: 24px; border-radius: 12px; }
 #migration-banner button, #workspace-load-error button { margin-top: 16px; }
 @media (max-width: 760px) {
@@ -36,7 +37,6 @@ html body .privacy-note { font-size: 12px; line-height: 1.6; color: #a9a9bf; mar
   html body .modal-row { flex-wrap: wrap; }
   html body .modal-footer { flex-wrap: wrap; }
   #demo-banner { padding: 8px 12px; font-size: 11px; }
-  #demo-banner:not([hidden]) + #app { height: calc(100dvh - 66px); }
 }
 @media (prefers-reduced-motion: reduce) {
   html body *, html body *::before, html body *::after { animation: none !important; transition: none !important; }

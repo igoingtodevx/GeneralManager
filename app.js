@@ -50,8 +50,6 @@ function saveBoardImmediate() {
   saveBoard();
   if (currentUser) return flushWorkspace(currentUser.uid).catch(() => {});
 }
-function saveArchive() { saveBoard(); }
-function saveArchiveImmediate() { return saveBoardImmediate(); }
 function loadSettings() {
   settings = { baseUrl: '', apiKey: '', model: '' };
   try {
@@ -219,9 +217,9 @@ function renderBoard() {
     header.appendChild(nameEl);
     header.appendChild(countEl);
     const options = document.createElement('button');
-    options.className = 'btn-icon column-options'; options.textContent = '⋯';
+    options.type = 'button'; options.className = 'btn-icon column-options'; options.textContent = '⋯';
     options.setAttribute('aria-label', 'Options for ' + col.name);
-    options.onclick = e => { const rect = options.getBoundingClientRect(); showColumnContextMenu({ clientX: rect.left, clientY: rect.bottom }, col.id); };
+    options.onclick = e => { e.stopPropagation(); const rect = options.getBoundingClientRect(); showColumnContextMenu({ clientX: rect.left, clientY: rect.bottom }, col.id); };
     header.appendChild(options);
     colEl.appendChild(header);
 
@@ -514,7 +512,6 @@ function archiveCard(cardId) {
   if (idx === -1) return;
   const card = board.cards.splice(idx, 1)[0];
   archive.push(card);
-  saveArchive();
   saveBoard();
   renderBoard();
 }
@@ -907,7 +904,7 @@ function renderArchiveList() {
     deleteBtn.addEventListener('click', () => {
       if (confirm(`Permanently delete "${card.title}"? This cannot be undone.`)) {
         archive = archive.filter(c => c.id !== card.id);
-        saveArchive();
+        saveBoard();
         renderArchiveList();
       }
     });
@@ -937,7 +934,6 @@ function restoreCard(cardId) {
   
   board.cards.push(card);
   saveBoard();
-  saveArchive();
   renderBoard();
   renderArchiveList();
 }
@@ -1053,7 +1049,6 @@ function clearDone() {
     board.cards = board.cards.filter(c => c.columnId !== col.id);
   }
   if (moved > 0) {
-    saveArchiveImmediate();
     saveBoardImmediate();
     renderBoard();
   }
@@ -1389,7 +1384,7 @@ function initGlobalEvents() {
   document.getElementById('archive-empty-btn').addEventListener('click', () => {
     if (archive.length > 0 && confirm('Permanently delete all archived cards? This cannot be undone.')) {
       archive = [];
-      saveArchiveImmediate();
+      saveBoardImmediate();
       renderArchiveList();
     }
   });

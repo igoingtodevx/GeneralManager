@@ -150,16 +150,16 @@ function showAuthModal() {
   const overlay = document.createElement('div');
   overlay.id = 'auth-overlay';
   overlay.innerHTML = `
-    <div id="auth-container">
+    <div id="auth-container" role="dialog" aria-modal="true" aria-labelledby="auth-title">
       <div class="auth-header">
-        <h2>GeneralManager</h2>
+        <h2 id="auth-title">GeneralManager</h2>
         <p>Sign in to sync your workspace</p>
         <a href="?demo=1">Try the interactive demo — no account needed</a>
         <p>Cloud data uses Firebase. Pending edits are also kept in this browser for recovery. Avoid shared browser profiles.</p>
       </div>
       <div class="auth-tabs">
-        <div class="auth-tab active" id="tab-login">Login</div>
-        <div class="auth-tab" id="tab-signup">Sign Up</div>
+        <button type="button" class="auth-tab active" id="tab-login">Login</button>
+        <button type="button" class="auth-tab" id="tab-signup">Sign Up</button>
       </div>
       <form class="auth-form" id="auth-form">
         <div id="auth-error"></div>
