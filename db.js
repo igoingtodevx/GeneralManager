@@ -185,13 +185,11 @@ async function importLocalStorageData(userId) {
       if (!boardData.meta) boardData.meta = {};
       boardData.meta.importedFromLocalStorage = true;
 
-      // Persist directly to Firebase
       await Promise.all([
         saveUserBoardImmediate(userId, boardData),
         saveUserArchiveImmediate(userId, archiveData)
       ]);
 
-      // Success, clear local storage
       clearLocalStorageData();
       return { board: boardData, archive: archiveData };
     }
@@ -202,7 +200,6 @@ async function importLocalStorageData(userId) {
   return null;
 }
 
-// Banner rendering
 function showMigrationBanner(userId, onImportComplete, onDismiss) {
   if (!hasLocalStorageData() || document.getElementById('migration-banner')) return;
 
@@ -218,7 +215,6 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
     </div>
   `;
 
-  // Insert banner before #app container or at the top of the body
   document.body.insertBefore(banner, document.body.firstChild);
 
   document.getElementById('btn-migrate-import').addEventListener('click', async () => {
@@ -228,9 +224,7 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
     try {
       const data = await importLocalStorageData(userId);
       banner.remove();
-      if (data) {
-        onImportComplete(data.board, data.archive);
-      }
+      if (data) onImportComplete(data.board, data.archive);
     } catch (err) {
       alert("Error importing data: " + err.message);
       importBtn.disabled = false;
@@ -245,3 +239,16 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
     }
   });
 }
+
+// Explicit compatibility boundary for the ES-module vNext controller.
+Object.assign(window, {
+  loadUserData,
+  saveUserBoardImmediate,
+  saveUserArchiveImmediate,
+  saveUserBoard,
+  saveUserArchive,
+  hasLocalStorageData,
+  clearLocalStorageData,
+  importLocalStorageData,
+  showMigrationBanner
+});
