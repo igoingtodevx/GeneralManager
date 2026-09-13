@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0a0d">
-  <meta name="description" content="GeneralManager — a personal operating surface for capturing, resuming and steering AI-native work.">
-  <title>GeneralManager</title>
+  <meta name="theme-color" content="#0b0b0d">
+  <meta name="description" content="General Manager — one calm place for work, life, ideas, commitments and the systems behind them.">
+  <title>General Manager</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,21 +13,22 @@
     <header class="topbar">
       <div class="brand-block">
         <div class="brand-mark" aria-hidden="true">G</div>
-        <input id="board-title" value="GeneralManager" aria-label="Workspace title" spellcheck="false">
+        <div class="brand-copy">
+          <input id="board-title" value="General Manager" aria-label="Workspace title" spellcheck="false">
+          <span>everything can come in · very little gets to interrupt you</span>
+        </div>
       </div>
 
-      <div class="view-switch" aria-label="Workspace view">
-        <button class="view-btn active" data-view="focus">Focus</button>
-        <button class="view-btn" data-view="board">Board</button>
-      </div>
-
-      <div class="top-search">
-        <input id="search-input" type="search" placeholder="Search everything…" autocomplete="off" aria-label="Search cards">
-        <span class="shortcut-hint">⌘K</span>
-      </div>
+      <nav class="nav-tabs" aria-label="Workspace">
+        <button class="nav-tab active" data-view="desk">Desk</button>
+        <button class="nav-tab" data-view="inbox">Inbox <span id="inbox-nav-count"></span></button>
+        <button class="nav-tab" data-view="everything">Everything</button>
+        <button class="nav-tab" data-view="sources">Sources</button>
+      </nav>
 
       <div class="top-actions">
-        <button class="icon-btn" id="archive-btn" title="Archive" aria-label="Open archive">◫</button>
+        <button class="btn btn-quiet" id="search-btn">Search <span class="keycap">⌘K</span></button>
+        <button class="btn btn-soft" id="regroup-btn">Regroup</button>
         <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Open settings">⚙</button>
         <div class="user-profile" id="user-profile">
           <span id="user-email"></span>
@@ -36,176 +37,176 @@
       </div>
     </header>
 
-    <section class="capture-shell" aria-label="Quick capture">
-      <div class="capture-input-wrap">
-        <input id="quick-input" type="text" placeholder="Capture a task, thought, URL, repo or unfinished thread…" autocomplete="off" spellcheck="false">
-      </div>
-      <div class="capture-meta">
-        <select id="quick-type-select" aria-label="Capture type">
-          <option value="NOTE">📝 Note</option>
-          <option value="AGENT">🤖 Agent</option>
-          <option value="RESEARCH">🔬 Research</option>
-          <option value="REPO">📦 Repo</option>
-          <option value="URL">🔗 URL</option>
-          <option value="IDEA">💡 Idea</option>
-        </select>
-        <select id="quick-destination" class="capture-destination" aria-label="Capture destination"></select>
-        <button class="btn btn-primary" id="quick-add-btn">Capture</button>
-      </div>
-      <span class="capture-note">/ focus · Enter capture · ⌘K commands</span>
-    </section>
-
     <main class="workspace">
-      <section id="focus-view" class="view"></section>
-      <section id="board-view" class="view hidden">
-        <div id="board-container"></div>
+      <section id="desk-view" class="view">
+        <div class="desk-intro">
+          <div class="eyebrow" id="daypart-label">Your desk</div>
+          <h1 id="desk-heading">What deserves your attention?</h1>
+          <p id="desk-subline">You do not need to look at everything to stay in control.</p>
+
+          <div class="capture-bar">
+            <input id="quick-input" type="text" placeholder="Drop a task, thought, promise, link or unfinished thing here…" autocomplete="off" spellcheck="false">
+            <select id="quick-kind" aria-label="Capture kind">
+              <option value="TASK">Task</option>
+              <option value="PROJECT">Project</option>
+              <option value="FOLLOWUP">Follow-up</option>
+              <option value="IDEA">Idea</option>
+              <option value="REFERENCE">Reference</option>
+              <option value="ROUTINE">Routine</option>
+            </select>
+            <button class="btn btn-primary" id="quick-add-btn">Capture</button>
+          </div>
+          <div class="capture-hint">Press <span class="keycap">/</span> from anywhere. New things land safely in Inbox unless you decide otherwise.</div>
+        </div>
+
+        <section class="manager-band">
+          <div>
+            <span class="manager-label">Desk capacity</span>
+            <strong id="capacity-copy">Three things is enough.</strong>
+          </div>
+          <div class="capacity-switch" id="capacity-switch">
+            <button data-capacity="LIGHT">Light · 1</button>
+            <button data-capacity="NORMAL" class="active">Normal · 3</button>
+            <button data-capacity="FULL">Full · 5</button>
+          </div>
+          <div class="manager-brief" id="manager-brief"></div>
+        </section>
+
+        <section class="desk-section primary-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Now</span><h2>Your active desk</h2></div>
+            <span class="section-note">Finite on purpose.</span>
+          </div>
+          <div id="desk-now-list" class="now-grid"></div>
+        </section>
+
+        <section class="desk-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Attention</span><h2>A few things worth a decision</h2></div>
+            <button class="btn btn-quiet btn-sm" id="attention-regroup-btn">Open Regroup</button>
+          </div>
+          <div id="desk-attention-list" class="attention-list"></div>
+        </section>
+
+        <section class="quiet-zone" id="quiet-zone"></section>
+      </section>
+
+      <section id="inbox-view" class="view hidden">
+        <div class="page-head">
+          <div><span class="eyebrow">Inbox</span><h1>Decide one thing at a time.</h1><p>Capture freely. Organize only when it becomes useful.</p></div>
+          <div class="page-stat" id="inbox-count"></div>
+        </div>
+        <div id="triage-stage" class="triage-stage"></div>
+        <div id="inbox-tail" class="inbox-tail"></div>
+      </section>
+
+      <section id="everything-view" class="view hidden">
+        <div class="page-head">
+          <div><span class="eyebrow">Everything</span><h1>The whole map, when you actually want it.</h1><p>This is storage and search — not your daily home screen.</p></div>
+        </div>
+        <div class="everything-tools">
+          <input id="everything-search" type="search" placeholder="Search titles, context, areas, sources…">
+          <div id="state-filters" class="filter-row"></div>
+        </div>
+        <div id="everything-list" class="everything-list"></div>
+      </section>
+
+      <section id="sources-view" class="view hidden">
+        <div class="page-head">
+          <div><span class="eyebrow">Sources</span><h1>The layer underneath the manager.</h1><p>Apps, people, agents and feeds can create input. They do not get to own your attention.</p></div>
+        </div>
+        <div class="source-philosophy">
+          <strong>Harness rule</strong>
+          <p>A noisy source should become one useful decision, not sixty notifications. Source connections are optional; General Manager still works as a complete manual system.</p>
+        </div>
+        <div id="sources-list" class="sources-list"></div>
       </section>
     </main>
   </div>
 
   <div id="inspector-backdrop" class="hidden"></div>
-  <aside id="inspector" class="hidden" aria-label="Card inspector">
+  <aside id="inspector" class="hidden" aria-label="Item inspector">
     <div class="inspector-head">
-      <span class="inspector-status" id="inspector-status">Autosaves as you work</span>
-      <button class="icon-btn" id="copy-handoff-btn" title="Copy local handoff">⧉</button>
+      <span class="inspector-status" id="inspector-status">Autosaves</span>
+      <button class="btn btn-quiet btn-sm" id="copy-handoff-btn">Copy handoff</button>
       <button class="icon-btn" id="inspector-close" title="Close">✕</button>
     </div>
     <div class="inspector-body">
-      <div class="field">
-        <input id="card-title" class="title-input" placeholder="Untitled">
+      <input id="item-title" class="title-input" placeholder="Untitled">
+      <div class="field hero-field">
+        <label for="item-next-action">Next move</label>
+        <input id="item-next-action" class="next-input" placeholder="What would make this move forward?">
       </div>
-      <div class="field">
-        <label for="card-next-action">Next action</label>
-        <input id="card-next-action" class="next-input" placeholder="What is the next concrete move?">
+      <div class="field-row three">
+        <div class="field"><label for="item-state">State</label><select id="item-state"></select></div>
+        <div class="field"><label for="item-kind">Kind</label><select id="item-kind"></select></div>
+        <div class="field"><label for="item-effort">Effort</label><select id="item-effort"></select></div>
       </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="card-column">State</label>
-          <select id="card-column"></select>
-        </div>
-        <div class="field">
-          <label for="card-priority">Priority</label>
-          <select id="card-priority">
-            <option value="HIGH">High</option>
-            <option value="MED">Medium</option>
-            <option value="LOW">Low</option>
-          </select>
-        </div>
+      <div class="field-row three">
+        <div class="field"><label for="item-priority">Priority</label><select id="item-priority"></select></div>
+        <div class="field"><label for="item-due">Date</label><input id="item-due" type="date"></div>
+        <div class="field"><label for="item-area">Area</label><input id="item-area" placeholder="Work, Home, Study…"></div>
       </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="card-type">Type</label>
-          <select id="card-type">
-            <option value="AGENT">Agent</option>
-            <option value="RESEARCH">Research</option>
-            <option value="REPO">Repo</option>
-            <option value="URL">URL</option>
-            <option value="NOTE">Note</option>
-            <option value="IDEA">Idea</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="card-ai-model">Model / tool</label>
-          <input id="card-ai-model" placeholder="e.g. Luna, Hermes, Opus">
-        </div>
-      </div>
-      <div class="field">
-        <label for="card-url">Primary link / repo</label>
-        <input id="card-url" placeholder="https://…" spellcheck="false">
-      </div>
-      <div class="field">
-        <label for="card-blocker">Blocker / waiting on</label>
-        <input id="card-blocker" placeholder="Only when useful">
-      </div>
-      <div class="field">
-        <label for="card-notes">Working context</label>
-        <textarea id="card-notes" placeholder="What would future-you need to resume this without reconstructing the whole thread?"></textarea>
-        <div class="field-note" id="card-timestamps"></div>
-      </div>
-      <div class="field">
-        <label>Checklist</label>
-        <div id="card-checklist" class="checklist"></div>
-        <div class="check-add">
-          <input id="check-input" placeholder="Add a small concrete step">
-          <button class="btn" id="check-add-btn">Add</button>
-        </div>
-      </div>
+      <div class="field"><label for="item-waiting">Waiting on</label><input id="item-waiting" placeholder="Person, reply, event or dependency"></div>
+      <div class="field"><label for="item-notes">Context for future-you</label><textarea id="item-notes" placeholder="Enough context to resume without reconstructing the whole story."></textarea><div class="field-note" id="item-timestamps"></div></div>
+      <details class="detail-group">
+        <summary>Source / system context</summary>
+        <div class="field-row"><div class="field"><label for="item-source-label">Source</label><input id="item-source-label" placeholder="Hermes, Gmail, Client, Calendar…"></div><div class="field"><label for="item-tool">Tool / system</label><input id="item-tool" placeholder="Optional"></div></div>
+        <div class="field"><label for="item-source-url">Link</label><input id="item-source-url" placeholder="https://…" spellcheck="false"></div>
+      </details>
+      <div class="field"><label>Small steps</label><div id="item-checklist" class="checklist"></div><div class="check-add"><input id="check-input" placeholder="Add a concrete step"><button class="btn" id="check-add-btn">Add</button></div></div>
 
       <section class="ai-strip">
-        <div class="ai-strip-head">
-          <strong>Optional AI assist</strong>
-          <span>Only this card is sent for card actions.</span>
-        </div>
+        <div class="ai-strip-head"><div><strong>Optional assist</strong><span>Only this item is sent.</span></div></div>
         <div class="ai-actions">
-          <button class="btn btn-sm" data-ai-action="refine">Refine</button>
-          <button class="btn btn-sm" data-ai-action="resume">Resume brief</button>
-          <button class="btn btn-sm" data-ai-action="route">Route</button>
+          <button class="btn btn-sm" data-ai-action="smaller">Make it smaller</button>
+          <button class="btn btn-sm" data-ai-action="resume">Resume me</button>
+          <button class="btn btn-sm" data-ai-action="clean">Clean context</button>
           <button class="btn btn-sm" data-ai-action="handoff">AI handoff</button>
         </div>
-        <div id="ai-card-output" class="ai-output hidden"></div>
-        <div class="ai-privacy">AI is never required for capture, organization, search, movement, handoffs or export.</div>
+        <div id="ai-item-output" class="ai-output hidden"></div>
       </section>
     </div>
     <div class="inspector-actions">
-      <button class="btn" id="duplicate-card-btn">Duplicate</button>
-      <button class="btn" id="archive-card-btn">Archive</button>
-      <button class="btn btn-danger" id="delete-card-btn">Delete</button>
+      <button class="btn" id="duplicate-item-btn">Duplicate</button>
+      <button class="btn" id="snooze-item-btn">Snooze 1 day</button>
+      <button class="btn btn-success" id="complete-item-btn">Done</button>
+      <button class="btn btn-danger" id="delete-item-btn">Delete</button>
     </div>
   </aside>
 
+  <div id="regroup-overlay" class="overlay hidden">
+    <div class="modal regroup-modal" role="dialog" aria-modal="true" aria-labelledby="regroup-title">
+      <div class="modal-head"><div><span class="eyebrow">Re-entry</span><h2 id="regroup-title">Regroup without catching up on everything.</h2></div><button class="icon-btn" data-close-overlay="regroup-overlay">✕</button></div>
+      <p class="modal-lede">Nothing here is a moral debt. We are only choosing what still deserves a place in front of you.</p>
+      <div id="regroup-list"></div>
+      <div class="modal-footer"><span id="regroup-footer-copy"></span><button class="btn btn-primary" data-close-overlay="regroup-overlay">Back to desk</button></div>
+    </div>
+  </div>
+
   <div id="command-overlay" class="overlay hidden">
-    <div class="command-box" role="dialog" aria-modal="true" aria-label="Command palette">
-      <input id="command-input" placeholder="Jump to a card or run an action…" autocomplete="off">
+    <div class="command-box" role="dialog" aria-modal="true" aria-label="Search and commands">
+      <input id="command-input" placeholder="Search anything or type a command…" autocomplete="off">
       <div id="command-results"></div>
     </div>
   </div>
 
   <div id="settings-overlay" class="overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <div class="modal-head">
-        <h2 id="settings-title">Settings</h2>
-        <button class="icon-btn" data-close-overlay="settings-overlay">✕</button>
-      </div>
+      <div class="modal-head"><h2 id="settings-title">Settings</h2><button class="icon-btn" data-close-overlay="settings-overlay">✕</button></div>
       <div class="settings-grid">
-        <div class="callout">Manual mode is complete on its own. API settings below are only used when you explicitly press an AI action. The API key remains in this browser's localStorage.</div>
+        <div class="callout"><strong>Manual mode is the product.</strong> AI is only an optional tool for a few explicit actions. Nothing on your desk requires a model.</div>
         <div class="settings-row"><label for="ai-base-url">OpenAI-compatible base URL</label><input id="ai-base-url" placeholder="https://api.openai.com/v1"></div>
-        <div class="settings-row"><label for="ai-model">Model</label><input id="ai-model" placeholder="gpt-4o-mini"></div>
-        <div class="settings-row"><label for="ai-api-key">API key</label><input id="ai-api-key" type="password" placeholder="sk-…" autocomplete="off"></div>
-        <div class="field-row">
-          <button class="btn" data-ai-preset="https://api.openai.com/v1">OpenAI</button>
-          <button class="btn" data-ai-preset="https://openrouter.ai/api/v1">OpenRouter</button>
-        </div>
-        <button class="btn" id="ai-test-btn">Test connection</button>
-        <div id="ai-status" class="field-note"></div>
+        <div class="settings-row"><label for="ai-model">Model</label><input id="ai-model" placeholder="model name"></div>
+        <div class="settings-row"><label for="ai-api-key">API key</label><input id="ai-api-key" type="password" placeholder="key" autocomplete="off"></div>
+        <div class="field-row"><button class="btn" data-ai-preset="https://api.openai.com/v1">OpenAI</button><button class="btn" data-ai-preset="https://openrouter.ai/api/v1">OpenRouter</button></div>
+        <button class="btn" id="ai-test-btn">Test connection</button><div id="ai-status" class="field-note"></div>
       </div>
-      <div class="modal-section">
-        <h3>Data</h3>
-        <div class="field-row">
-          <button class="btn" id="export-btn">Export JSON</button>
-          <button class="btn" id="import-btn">Import / merge JSON</button>
-        </div>
-        <input type="file" id="import-file" accept="application/json,.json" class="hidden">
-      </div>
+      <div class="modal-section"><h3>Data</h3><p class="field-note">Cloud sync is currently backed by Firebase. The manager model itself does not depend on Firebase and can move to local-first desktop storage later.</p><div class="field-row"><button class="btn" id="export-btn">Export JSON</button><button class="btn" id="import-btn">Import / merge JSON</button></div><input type="file" id="import-file" accept="application/json,.json" class="hidden"></div>
       <div class="modal-footer"><button class="btn btn-primary" data-close-overlay="settings-overlay">Done</button></div>
     </div>
   </div>
 
-  <div id="archive-overlay" class="overlay hidden">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="archive-title">
-      <div class="modal-head">
-        <h2 id="archive-title">Archive</h2>
-        <button class="icon-btn" data-close-overlay="archive-overlay">✕</button>
-      </div>
-      <div class="field"><input id="archive-search" placeholder="Search archive…"></div>
-      <div id="archive-list" class="archive-list"></div>
-      <div class="modal-footer">
-        <button class="btn btn-danger" id="empty-archive-btn">Empty archive</button>
-        <button class="btn btn-primary" data-close-overlay="archive-overlay">Done</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="context-menu" class="context-menu hidden"></div>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
