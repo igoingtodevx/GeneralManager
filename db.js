@@ -1,7 +1,18 @@
 // db.js
 
-// CSS styles for Save Indicator and Migration Banner
+// Compatibility aliases keep the existing auth/sync surfaces visually coherent
+// while the vNext shell uses a smaller token vocabulary.
 const dbStyles = `
+:root {
+  --text-primary: var(--text);
+  --text-muted: var(--muted);
+  --bg-input: var(--panel-2);
+  --bg-panel: var(--panel);
+  --border-color: var(--border);
+  --accent-purple: var(--accent);
+  --type-repo: var(--green);
+  --priority-high: var(--red);
+}
 #save-indicator {
   font-size: 11px;
   color: var(--text-muted);
@@ -63,12 +74,10 @@ const dbStyles = `
 }
 `;
 
-// Append CSS
 const dbStyleEl = document.createElement('style');
 dbStyleEl.textContent = dbStyles;
 document.head.appendChild(dbStyleEl);
 
-// Debouncing helpers
 function debounce(fn, delay) {
   let timer = null;
   return function(...args) {
@@ -80,7 +89,6 @@ function debounce(fn, delay) {
   };
 }
 
-// Show save state indicator in UI
 function showSaveIndicator(state) {
   let indicator = document.getElementById('save-indicator');
   if (!indicator) {
@@ -107,7 +115,6 @@ function showSaveIndicator(state) {
   }
 }
 
-// Firestore operations
 async function loadUserData(userId) {
   try {
     const boardRef = db.collection('users').doc(userId).collection('data').doc('board');
@@ -121,12 +128,8 @@ async function loadUserData(userId) {
     let boardData = null;
     let archiveData = [];
 
-    if (boardSnap.exists) {
-      boardData = boardSnap.data();
-    }
-    if (archiveSnap.exists) {
-      archiveData = archiveSnap.data().cards || [];
-    }
+    if (boardSnap.exists) boardData = boardSnap.data();
+    if (archiveSnap.exists) archiveData = archiveSnap.data().cards || [];
 
     return { board: boardData, archive: archiveData };
   } catch (err) {
@@ -156,11 +159,9 @@ async function saveUserArchiveImmediate(userId, archiveData) {
   }
 }
 
-// Debounced versions for non-blocking UI interactions
 const saveUserBoard = debounce(saveUserBoardImmediate, 800);
 const saveUserArchive = debounce(saveUserArchiveImmediate, 800);
 
-// Migration Checker
 function hasLocalStorageData() {
   return localStorage.getItem('gm_board') !== null;
 }
@@ -240,7 +241,6 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
   });
 }
 
-// Explicit compatibility boundary for the ES-module vNext controller.
 Object.assign(window, {
   loadUserData,
   saveUserBoardImmediate,
