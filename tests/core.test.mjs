@@ -63,6 +63,14 @@ test('desk capacity is a hard attention budget, not a backlog view', () => {
   assert.equal(desk[0].title, 'B');
 });
 
+test('queue stays out of the active desk even when capacity is available', () => {
+  const workspace = createDefaultWorkspace(0);
+  workspace.meta.capacityMode = 'FULL';
+  captureItem(workspace, { title: 'Active', state: 'NOW' }, 10);
+  captureItem(workspace, { title: 'Possible next', state: 'QUEUE' }, 20);
+  assert.deepEqual(deskItems(workspace, 30).map(item => item.title), ['Active']);
+});
+
 test('regroup surfaces only meaningful re-entry decisions', () => {
   const now = 20 * DAY;
   const workspace = createDefaultWorkspace(now);

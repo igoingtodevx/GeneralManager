@@ -41,19 +41,11 @@
       <section id="desk-view" class="view">
         <div class="desk-intro">
           <div class="eyebrow" id="daypart-label">Your desk</div>
-          <h1 id="desk-heading">What deserves your attention?</h1>
-          <p id="desk-subline">You do not need to look at everything to stay in control.</p>
+          <h1 id="desk-heading">Your desk.</h1>
+          <p id="desk-subline">A small surface for what matters now. Everything else stays held.</p>
 
           <div class="capture-bar">
-            <input id="quick-input" type="text" placeholder="Drop a task, thought, promise, link or unfinished thing here…" autocomplete="off" spellcheck="false">
-            <select id="quick-kind" aria-label="Capture kind">
-              <option value="TASK">Task</option>
-              <option value="PROJECT">Project</option>
-              <option value="FOLLOWUP">Follow-up</option>
-              <option value="IDEA">Idea</option>
-              <option value="REFERENCE">Reference</option>
-              <option value="ROUTINE">Routine</option>
-            </select>
+            <input id="quick-input" type="text" placeholder="Drop anything here — task, thought, promise, link, unfinished thing…" autocomplete="off" spellcheck="false">
             <button class="btn btn-primary" id="quick-add-btn">Capture</button>
           </div>
           <div class="capture-hint">Press <span class="keycap">/</span> from anywhere. New things land safely in Inbox unless you decide otherwise.</div>
@@ -78,6 +70,14 @@
             <span class="section-note">Finite on purpose.</span>
           </div>
           <div id="desk-now-list" class="now-grid"></div>
+        </section>
+
+        <section class="desk-section up-next-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Up next</span><h2>One good next candidate</h2></div>
+            <span class="section-note">Suggestion, not obligation.</span>
+          </div>
+          <div id="desk-next-list"></div>
         </section>
 
         <section class="desk-section">

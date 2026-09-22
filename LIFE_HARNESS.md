@@ -154,3 +154,7 @@ Stop and reconsider a feature if it:
 - makes AI necessary for ordinary use;
 - adds a second way to do something without eliminating an older one;
 - optimizes a complex subsystem that could be removed instead.
+
+## Desk semantic boundary
+
+`NOW` is a commitment and is the only state rendered on the active desk. `QUEUE` is not spare desk content; it is a pool from which the manager may surface one quiet **Up next** candidate. Capacity therefore limits active commitments rather than filling visual slots.

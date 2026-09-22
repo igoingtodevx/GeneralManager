@@ -223,10 +223,44 @@ function renderDesk() {
   if (!desk.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-card';
-    empty.innerHTML = '<strong>Your desk is clear.</strong>Pull something forward only when it deserves attention.';
+    empty.innerHTML = '<strong>Your desk is clear.</strong> Pull something forward only when it deserves attention.';
     nowRoot.appendChild(empty);
   } else {
     desk.forEach((item, index) => nowRoot.appendChild(managerCard(item, index)));
+  }
+
+  const nextRoot = $('desk-next-list');
+  nextRoot.replaceChildren();
+  const nextCandidate = workspace.items
+    .filter(item => item.state === 'QUEUE')
+    .sort((a, b) => (b.priority === 'HIGH') - (a.priority === 'HIGH') || b.updatedAt - a.updatedAt)[0];
+  if (nextCandidate) {
+    const row = document.createElement('button');
+    row.className = 'next-candidate';
+    const copy = document.createElement('span');
+    const title = document.createElement('strong');
+    title.textContent = nextCandidate.title;
+    copy.appendChild(title);
+    if (nextCandidate.nextAction) {
+      const next = document.createElement('small');
+      next.textContent = nextCandidate.nextAction;
+      copy.appendChild(next);
+    }
+    const action = document.createElement('span');
+    action.textContent = 'Bring to desk →';
+    row.append(copy, action);
+    row.addEventListener('click', () => {
+      setItemState(workspace, nextCandidate.id, 'NOW');
+      saveWorkspace();
+      renderAll();
+      toast('Moved to your desk.');
+    });
+    nextRoot.appendChild(row);
+  } else {
+    const quietNext = document.createElement('div');
+    quietNext.className = 'quiet-next';
+    quietNext.textContent = 'Nothing is waiting to be pulled forward.';
+    nextRoot.appendChild(quietNext);
   }
 
   const brief = [];
@@ -434,10 +468,9 @@ function captureQuick() {
   const raw = input.value.trim();
   if (!raw) return;
   const looksLikeUrl = /^https?:\/\//i.test(raw);
-  const kind = looksLikeUrl ? 'REFERENCE' : $('quick-kind').value;
+  const kind = looksLikeUrl ? 'REFERENCE' : 'TASK';
   captureItem(workspace, { title: raw, kind, sourceUrl: looksLikeUrl ? raw : '' });
   input.value = '';
-  workspace.meta.lastCaptureKind = kind;
   saveWorkspace();
   renderAll();
   toast('Captured. No organizing required.');
@@ -832,7 +865,6 @@ function attachListeners() {
   $$('.nav-tab').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
   $('quick-add-btn').addEventListener('click', captureQuick);
   $('quick-input').addEventListener('keydown', event => { if (event.key === 'Enter') captureQuick(); });
-  $('quick-kind').addEventListener('change', event => { if (workspace) workspace.meta.lastCaptureKind = event.target.value; });
 
   $$('#capacity-switch button').forEach(button => button.addEventListener('click', () => {
     if (!workspace) return;
@@ -973,7 +1005,6 @@ async function bootstrapForUser(user) {
   }
   const previousOpen = workspace.meta.lastOpenedAt;
   workspace.meta.lastOpenedAt = Date.now();
-  $('quick-kind').value = workspace.meta.lastCaptureKind || 'TASK';
   renderAll();
   setView(workspace.meta.preferredView || 'desk', false);
   saveWorkspace();

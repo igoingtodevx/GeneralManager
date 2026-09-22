@@ -199,7 +199,7 @@ export function attentionScore(item, now = Date.now()) {
 export function deskItems(workspace, now = Date.now()) {
   const limit = CAPACITY_SLOTS[workspace?.meta?.capacityMode] || 3;
   return workspace.items
-    .filter(item => ['NOW', 'QUEUE'].includes(item.state) && isAvailable(item, now))
+    .filter(item => item.state === 'NOW' && isAvailable(item, now))
     .sort((a, b) => attentionScore(b, now) - attentionScore(a, now) || b.updatedAt - a.updatedAt)
     .slice(0, limit);
 }

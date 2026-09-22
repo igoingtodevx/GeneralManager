@@ -305,3 +305,19 @@ h2 { font-size: 20px; letter-spacing: -.025em; margin: 5px 0 0; }
   .regroup-item { grid-template-columns: 1fr; }
   .regroup-actions { flex-wrap: wrap; }
 }
+
+/* Life-harness desk refinement: operational, not landing-page-like. */
+.desk-intro { max-width: 1000px; margin-bottom: 18px; text-align: left; }
+.desk-intro h1 { font-size: clamp(28px, 3vw, 42px); margin: 7px 0 6px; }
+.desk-intro > p { font-size: 13px; margin-bottom: 0; }
+.capture-bar { margin: 18px 0 0; max-width: none; grid-template-columns: 1fr auto; }
+.capture-hint { text-align: left; margin-left: 8px; }
+.manager-band { padding: 11px 14px; margin-bottom: 22px; }
+.manager-card.primary { min-height: 160px; }
+.up-next-section { margin-top: 24px; }
+.next-candidate { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid var(--border); background: rgba(255,255,255,.018); color: var(--text); border-radius: 13px; padding: 13px 15px; text-align: left; cursor: pointer; }
+.next-candidate:hover { border-color: var(--border-strong); background: rgba(255,255,255,.03); }
+.next-candidate span:first-child { display: grid; gap: 3px; }
+.next-candidate small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.next-candidate span:last-child { color: var(--accent); font-size: 11px; white-space: nowrap; }
+.quiet-next { color: var(--faint); font-size: 11px; padding: 8px 1px; }
