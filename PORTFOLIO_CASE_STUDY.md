@@ -8,6 +8,14 @@ General Manager separates capture from commitment and makes re-entry after inter
 
 Many task managers work well while they are maintained perfectly. The interesting moment is what happens after that breaks: several days pass, tasks and ideas accumulate, external outputs pile up, and reopening the system itself feels expensive. General Manager lets all of that enter without making it a commitment. The Desk has a real attention budget, Inbox is processed one item at a time, and a Regroup session is capped at three decisions before the user can simply continue working. The core flow is deterministic and works without AI.
 
+## Why I built it
+
+I kept ending up with new to-do lists in different apps. Every time I thought “this time I’ll keep it clean”, the system eventually became another place full of things I was supposed to look at. Even useful automation can turn into the same problem: if a tool produces enough reminders, runs or notifications, the tool itself becomes another backlog.
+
+The problem was not really capturing tasks. It was deciding **what is actually allowed to demand my attention right now** — and being able to come back after a few messy days without first cleaning up my entire digital life.
+
+That is the main difference to a normal to-do app or a Notion/Obsidian setup. Those tools are good at storing tasks or information. General Manager is meant to sit one layer above them: everything can come in, but only a few things become real commitments. If I disappear for a week, the system should help me re-enter with a few decisions instead of showing me a wall of overdue work.
+
 ## Three portfolio screenshots
 
 1. **Finite Desk** — one active commitment, a visible capacity budget and at most one calm Up-next candidate.
