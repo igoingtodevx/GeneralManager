@@ -17,8 +17,12 @@ server_pid=$!
 chrome_pid=""
 cleanup() {
   kill "$server_pid" 2>/dev/null || true
-  if [ -n "$chrome_pid" ]; then kill "$chrome_pid" 2>/dev/null || true; fi
-  rm -rf "$PROFILE_DIR"
+  if [ -n "$chrome_pid" ]; then
+    kill "$chrome_pid" 2>/dev/null || true
+    wait "$chrome_pid" 2>/dev/null || true
+  fi
+  wait "$server_pid" 2>/dev/null || true
+  rm -rf "$PROFILE_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
