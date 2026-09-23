@@ -1,7 +1,18 @@
 // db.js
 
-// CSS styles for Save Indicator and Migration Banner
+// Compatibility aliases keep the existing auth/sync surfaces visually coherent
+// while the vNext shell uses a smaller token vocabulary.
 const dbStyles = `
+:root {
+  --text-primary: var(--text);
+  --text-muted: var(--muted);
+  --bg-input: var(--panel-2);
+  --bg-panel: var(--panel);
+  --border-color: var(--border);
+  --accent-purple: var(--accent);
+  --type-repo: var(--green);
+  --priority-high: var(--red);
+}
 #save-indicator {
   font-size: 11px;
   color: var(--text-muted);
@@ -63,12 +74,10 @@ const dbStyles = `
 }
 `;
 
-// Append CSS
 const dbStyleEl = document.createElement('style');
 dbStyleEl.textContent = dbStyles;
 document.head.appendChild(dbStyleEl);
 
-// Debouncing helpers
 function debounce(fn, delay) {
   let timer = null;
   return function(...args) {
@@ -80,7 +89,6 @@ function debounce(fn, delay) {
   };
 }
 
-// Show save state indicator in UI
 function showSaveIndicator(state) {
   let indicator = document.getElementById('save-indicator');
   if (!indicator) {
@@ -101,13 +109,12 @@ function showSaveIndicator(state) {
   if (state === 'saving') {
     textEl.textContent = 'Saving...';
   } else if (state === 'saved') {
-    textEl.textContent = 'Synced';
+    textEl.textContent = window.GM_DEMO_MODE ? 'Saved locally' : 'Synced';
   } else if (state === 'error') {
     textEl.textContent = 'Offline / Error';
   }
 }
 
-// Firestore operations
 async function loadUserData(userId) {
   try {
     const boardRef = db.collection('users').doc(userId).collection('data').doc('board');
@@ -121,12 +128,8 @@ async function loadUserData(userId) {
     let boardData = null;
     let archiveData = [];
 
-    if (boardSnap.exists) {
-      boardData = boardSnap.data();
-    }
-    if (archiveSnap.exists) {
-      archiveData = archiveSnap.data().cards || [];
-    }
+    if (boardSnap.exists) boardData = boardSnap.data();
+    if (archiveSnap.exists) archiveData = archiveSnap.data().cards || [];
 
     return { board: boardData, archive: archiveData };
   } catch (err) {
@@ -156,11 +159,9 @@ async function saveUserArchiveImmediate(userId, archiveData) {
   }
 }
 
-// Debounced versions for non-blocking UI interactions
 const saveUserBoard = debounce(saveUserBoardImmediate, 800);
 const saveUserArchive = debounce(saveUserArchiveImmediate, 800);
 
-// Migration Checker
 function hasLocalStorageData() {
   return localStorage.getItem('gm_board') !== null;
 }
@@ -185,13 +186,11 @@ async function importLocalStorageData(userId) {
       if (!boardData.meta) boardData.meta = {};
       boardData.meta.importedFromLocalStorage = true;
 
-      // Persist directly to Firebase
       await Promise.all([
         saveUserBoardImmediate(userId, boardData),
         saveUserArchiveImmediate(userId, archiveData)
       ]);
 
-      // Success, clear local storage
       clearLocalStorageData();
       return { board: boardData, archive: archiveData };
     }
@@ -202,7 +201,6 @@ async function importLocalStorageData(userId) {
   return null;
 }
 
-// Banner rendering
 function showMigrationBanner(userId, onImportComplete, onDismiss) {
   if (!hasLocalStorageData() || document.getElementById('migration-banner')) return;
 
@@ -218,7 +216,6 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
     </div>
   `;
 
-  // Insert banner before #app container or at the top of the body
   document.body.insertBefore(banner, document.body.firstChild);
 
   document.getElementById('btn-migrate-import').addEventListener('click', async () => {
@@ -228,9 +225,7 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
     try {
       const data = await importLocalStorageData(userId);
       banner.remove();
-      if (data) {
-        onImportComplete(data.board, data.archive);
-      }
+      if (data) onImportComplete(data.board, data.archive);
     } catch (err) {
       alert("Error importing data: " + err.message);
       importBtn.disabled = false;
@@ -245,3 +240,15 @@ function showMigrationBanner(userId, onImportComplete, onDismiss) {
     }
   });
 }
+
+Object.assign(window, {
+  loadUserData,
+  saveUserBoardImmediate,
+  saveUserArchiveImmediate,
+  saveUserBoard,
+  saveUserArchive,
+  hasLocalStorageData,
+  clearLocalStorageData,
+  importLocalStorageData,
+  showMigrationBanner
+});

@@ -1,1414 +1,216 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GeneralManager — Context &amp; Task Manager</title>
-<meta name="description" content="Personal AI-assisted context and task manager for power users running multiple AI agents, research sessions, and workflows.">
-<style>
-/* ═══════════════════════════════════════════════════════════
-   DESIGN TOKENS
-   ═══════════════════════════════════════════════════════════ */
-:root {
-  --bg-page: radial-gradient(ellipse at 50% 0%, #1a1030 0%, #0f0f13 60%);
-  --bg-card: #1a1a24;
-  --bg-panel: #13131c;
-  --bg-input: #1e1e2e;
-  --border-color: #2a2a3a;
-  --text-primary: #e8e8f0;
-  --text-muted: #6b6b8a;
-  --accent-purple: #7c3aed;
-  --accent-purple-dim: rgba(124, 58, 237, 0.25);
-
-  --type-agent: #7c3aed;
-  --type-research: #0ea5e9;
-  --type-repo: #10b981;
-  --type-url: #f59e0b;
-  --type-note: #6b7280;
-  --type-idea: #ec4899;
-
-  --priority-high: #ef4444;
-  --priority-med: #f59e0b;
-  --priority-low: #374151;
-
-  --radius: 8px;
-  --radius-sm: 4px;
-  --transition: 150ms ease;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   RESET & BASE
-   ═══════════════════════════════════════════════════════════ */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-html, body {
-  height: 100%;
-  background: var(--bg-page);
-  color: var(--text-primary);
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  overflow: hidden;
-}
-
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
-
-input, textarea, select, button {
-  font-family: inherit;
-  font-size: inherit;
-  color: var(--text-primary);
-  border: none;
-  outline: none;
-  background: none;
-}
-
-button { cursor: pointer; }
-a { color: var(--type-url); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-/* ═══════════════════════════════════════════════════════════
-   LAYOUT
-   ═══════════════════════════════════════════════════════════ */
-#app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  min-width: 1024px;
-}
-
-#top-bar {
-  flex-shrink: 0;
-  background: rgba(19, 19, 28, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  padding: 12px 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  z-index: 100;
-}
-
-#board-title {
-  font-size: 18px;
-  font-weight: 700;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  min-width: 120px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  cursor: text;
-}
-#board-title:hover { background: var(--bg-input); }
-#board-title:focus { background: var(--bg-input); outline: 1px solid var(--accent-purple); }
-
-#quick-capture {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  max-width: 700px;
-}
-
-#quick-input {
-  flex: 1;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 8px 14px;
-  color: var(--text-primary);
-  transition: border-color var(--transition);
-}
-#quick-input:focus { border-color: var(--accent-purple); }
-#quick-input::placeholder { color: var(--text-muted); }
-
-#quick-type-select {
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-#quick-type-select option { background: var(--bg-panel); }
-
-.btn {
-  padding: 8px 16px;
-  border-radius: var(--radius);
-  font-weight: 600;
-  font-size: 13px;
-  transition: all var(--transition);
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
-  color: #fff;
-  box-shadow: 0 0 16px rgba(124,58,237,0.35);
-}
-.btn-primary:hover {
-  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
-  box-shadow: 0 0 24px rgba(124,58,237,0.5);
-}
-
-.btn-ghost {
-  background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border-color);
-}
-.btn-ghost:hover { background: var(--bg-input); color: var(--text-primary); border-color: var(--text-muted); }
-
-.btn-ghost.active {
-  background: var(--accent-purple-dim);
-  color: var(--accent-purple);
-  border-color: var(--accent-purple);
-}
-
-.btn-sm {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-
-.btn-icon {
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-}
-.btn-icon:hover { background: var(--bg-input); color: var(--text-primary); }
-
-#ai-toggle-btn {
-  margin-left: auto;
-  font-size: 16px;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   TOOLBAR
-   ═══════════════════════════════════════════════════════════ */
-#toolbar {
-  flex-shrink: 0;
-  background: rgba(19, 19, 28, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  padding: 8px 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  z-index: 90;
-}
-
-#search-input {
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 6px 12px;
-  width: 200px;
-  color: var(--text-primary);
-  transition: border-color var(--transition);
-}
-#search-input:focus { border-color: var(--accent-purple); }
-#search-input::placeholder { color: var(--text-muted); }
-
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.filter-group .label {
-  color: var(--text-muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-right: 4px;
-}
-
-.toolbar-separator {
-  width: 1px;
-  height: 24px;
-  background: var(--border-color);
-  margin: 0 4px;
-}
-
-.toolbar-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   MAIN CONTENT AREA
-   ═══════════════════════════════════════════════════════════ */
-#main-area {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-}
-
-#board-container {
-  flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 20px;
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   COLUMNS
-   ═══════════════════════════════════════════════════════════ */
-.column {
-  min-width: 280px;
-  max-width: 340px;
-  width: 280px;
-  flex-shrink: 0;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  display: flex;
-  flex-direction: column;
-  max-height: 100%;
-  --col-accent: #6b7280;
-  --col-accent-bg: rgba(107, 114, 128, 0.2);
-  border-top: 2px solid var(--col-accent);
-}
-
-.column:nth-child(1) {
-  --col-accent: #6366f1;
-  --col-accent-bg: rgba(99, 102, 241, 0.2);
-}
-.column:nth-child(2) {
-  --col-accent: #10b981;
-  --col-accent-bg: rgba(16, 185, 129, 0.2);
-}
-.column:nth-child(3) {
-  --col-accent: #f59e0b;
-  --col-accent-bg: rgba(245, 158, 11, 0.2);
-}
-.column:nth-child(4) {
-  --col-accent: #6b7280;
-  --col-accent-bg: rgba(107, 114, 128, 0.2);
-}
-
-.column-header {
-  display: flex;
-  align-items: center;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-color);
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.column-name {
-  font-weight: 700;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  color: var(--text-muted);
-  cursor: default;
-  flex: 1;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-.column-name.editing {
-  background: var(--bg-input);
-  outline: 1px solid var(--accent-purple);
-  cursor: text;
-  color: var(--text-primary);
-}
-
-.column-count {
-  background: var(--col-accent-bg);
-  color: var(--col-accent);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  min-width: 24px;
-  text-align: center;
-}
-
-.column-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 80px;
-}
-
-.column-body.drag-over {
-  background: var(--accent-purple-dim);
-  border: 2px dashed var(--accent-purple);
-  border-radius: 0 0 var(--radius) var(--radius);
-}
-
-.column-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 100%;
-  min-height: 80px;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-align: center;
-  padding: 16px;
-}
-.column-empty::before {
-  content: "✦";
-  font-size: 24px;
-  color: var(--text-muted);
-  line-height: 1;
-}
-
-.column-footer {
-  padding: 8px 10px;
-  border-top: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.column-quick-add {
-  width: 100%;
-  background: transparent;
-  border: 1px dashed var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-align: left;
-  transition: all var(--transition);
-}
-.column-quick-add:hover {
-  border-color: var(--accent-purple);
-  color: var(--text-primary);
-  background: var(--accent-purple-dim);
-}
-
-#add-column-btn {
-  min-width: 48px;
-  height: 48px;
-  border-radius: var(--radius);
-  border: 2px dashed var(--border-color);
-  color: var(--text-muted);
-  font-size: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: all var(--transition);
-  align-self: flex-start;
-  margin-top: 0;
-}
-#add-column-btn:hover {
-  border-color: var(--accent-purple);
-  color: var(--accent-purple);
-  background: var(--accent-purple-dim);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   CARDS
-   ═══════════════════════════════════════════════════════════ */
-.card {
-  background: linear-gradient(145deg, #1d1d2e 0%, #1a1a24 100%);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 12px;
-  cursor: grab;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 0px transparent;
-  transition: box-shadow var(--transition), opacity var(--transition), transform var(--transition), translate var(--transition);
-  position: relative;
-}
-.card:hover {
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(124,58,237,0.2);
-  transform: translateY(-1px);
-  translate: 0 -1px;
-}
-.card.dragging {
-  opacity: 0.3;
-}
-
-.card[data-type="AGENT"]    { border-left: 3px solid var(--type-agent); }
-.card[data-type="RESEARCH"] { border-left: 3px solid var(--type-research); }
-.card[data-type="REPO"]     { border-left: 3px solid var(--type-repo); }
-.card[data-type="URL"]      { border-left: 3px solid var(--type-url); }
-.card[data-type="NOTE"]     { border-left: 3px solid var(--type-note); }
-.card[data-type="IDEA"]     { border-left: 3px solid var(--type-idea); }
-
-.card-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.card-title {
-  flex: 1;
-  font-weight: 600;
-  font-size: 13px;
-  line-height: 1.4;
-  word-break: break-word;
-}
-
-.card-priority {
-  width: auto;
-  height: 18px;
-  padding: 2px 7px;
-  border-radius: 9px;
-  font-size: 10px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: transform var(--transition);
-  line-height: 1;
-}
-.card-priority:hover { transform: scale(1.05); }
-.card-priority[data-priority="HIGH"] {
-  background: rgba(239, 68, 68, 0.2);
-  color: #ef4444;
-}
-.card-priority[data-priority="MED"] {
-  background: rgba(245, 158, 11, 0.2);
-  color: #f59e0b;
-}
-.card-priority[data-priority="LOW"] {
-  background: rgba(107, 114, 128, 0.2);
-  color: #9ca3af;
-}
-.card-priority[data-priority="HIGH"]::after { content: "HIGH"; }
-.card-priority[data-priority="MED"]::after { content: "MED"; }
-.card-priority[data-priority="LOW"]::after { content: "LOW"; }
-
-.card-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.card-tag {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 3px;
-  letter-spacing: 0.5px;
-}
-
-.card-tag.type-tag {
-  color: #fff;
-  border-radius: 6px;
-  font-size: 11px;
-}
-.card-tag.type-tag[data-type="AGENT"]    { background: var(--type-agent); box-shadow: 0 0 8px #7c3aed33; }
-.card-tag.type-tag[data-type="RESEARCH"] { background: var(--type-research); box-shadow: 0 0 8px #0ea5e933; }
-.card-tag.type-tag[data-type="REPO"]     { background: var(--type-repo); box-shadow: 0 0 8px #10b98133; }
-.card-tag.type-tag[data-type="URL"]      { background: var(--type-url); box-shadow: 0 0 8px #f59e0b33; }
-.card-tag.type-tag[data-type="NOTE"]     { background: var(--type-note); box-shadow: 0 0 8px #6b728033; }
-.card-tag.type-tag[data-type="IDEA"]     { background: var(--type-idea); box-shadow: 0 0 8px #ec489933; }
-
-.card-tag.ai-tag {
-  background: var(--bg-input);
-  color: var(--text-muted);
-  border: 1px solid var(--border-color);
-}
-
-.card-time {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-left: auto;
-}
-
-.card-url {
-  display: block;
-  margin-top: 6px;
-  font-family: 'Courier New', monospace;
-  font-size: 11px;
-  color: var(--type-url);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-  text-decoration: none;
-}
-.card-url:hover { text-decoration: underline; }
-
-/* ═══════════════════════════════════════════════════════════
-   CONTEXT MENU
-   ═══════════════════════════════════════════════════════════ */
-#context-menu {
-  position: fixed;
-  z-index: 1000;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 4px 0;
-  min-width: 180px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-  display: none;
-}
-
-#context-menu.visible { display: block; }
-
-.ctx-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  font-size: 13px;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background var(--transition);
-  width: 100%;
-  text-align: left;
-}
-.ctx-item:hover { background: var(--accent-purple-dim); }
-.ctx-item.danger { color: var(--priority-high); }
-.ctx-item.danger:hover { background: rgba(239,68,68,0.15); }
-
-.ctx-separator {
-  height: 1px;
-  background: var(--border-color);
-  margin: 4px 0;
-}
-
-.ctx-submenu {
-  padding: 4px 14px 4px 30px;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   MODAL
-   ═══════════════════════════════════════════════════════════ */
-#modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.6);
-  z-index: 500;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(4px);
-}
-#modal-overlay.visible {
-  display: flex;
-}
-
-#modal {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  width: 560px;
-  max-height: 85vh;
-  overflow-y: auto;
-  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
-  padding: 24px;
-}
-
-.modal-title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-#modal-title {
-  flex: 1;
-  font-size: 18px;
-  font-weight: 700;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  color: var(--text-primary);
-}
-#modal-title:focus { border-color: var(--accent-purple); }
-
-#modal-close {
-  font-size: 20px;
-  color: var(--text-muted);
-  padding: 4px 8px;
-}
-#modal-close:hover { color: var(--text-primary); }
-
-.modal-field {
-  margin-bottom: 16px;
-}
-.modal-field label {
-  display: block;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  font-weight: 600;
-}
-.modal-field input,
-.modal-field textarea,
-.modal-field select {
-  width: 100%;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  color: var(--text-primary);
-  transition: border-color var(--transition);
-}
-.modal-field input:focus,
-.modal-field textarea:focus,
-.modal-field select:focus {
-  border-color: var(--accent-purple);
-}
-.modal-field select option { background: var(--bg-panel); }
-.modal-field textarea {
-  font-family: 'Courier New', monospace;
-  min-height: 120px;
-  resize: vertical;
-}
-.modal-field .url-display {
-  font-family: 'Courier New', monospace;
-}
-
-.modal-row {
-  display: flex;
-  gap: 12px;
-}
-.modal-row .modal-field { flex: 1; }
-
-.modal-timestamps {
-  display: flex;
-  gap: 20px;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color);
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   AI PANEL
-   ═══════════════════════════════════════════════════════════ */
-#ai-panel {
-  width: 380px;
-  flex-shrink: 0;
-  background: rgba(19, 19, 28, 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-left: 1px solid var(--border-color);
-  display: none;
-  flex-direction: column;
-  overflow: hidden;
-}
-#ai-panel.visible {
-  display: flex;
-}
-
-.ai-panel-header {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.ai-panel-header h3 {
-  font-size: 14px;
-  font-weight: 700;
-  flex: 1;
-}
-
-.ai-panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.ai-section {
-  margin-bottom: 20px;
-}
-.ai-section-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.ai-field {
-  margin-bottom: 10px;
-}
-.ai-field label {
-  display: block;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-.ai-field input,
-.ai-field textarea {
-  width: 100%;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 7px 10px;
-  color: var(--text-primary);
-  font-size: 13px;
-  transition: border-color var(--transition);
-}
-.ai-field input:focus,
-.ai-field textarea:focus { border-color: var(--accent-purple); }
-
-.ai-presets {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-.ai-presets .btn-sm {
-  font-size: 11px;
-  padding: 3px 8px;
-}
-
-.api-key-wrapper {
-  position: relative;
-}
-.api-key-wrapper input { padding-right: 36px; }
-.api-key-toggle {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  padding: 4px 6px;
-  font-size: 14px;
-  color: var(--text-muted);
-  cursor: pointer;
-  background: none;
-  border: none;
-}
-.api-key-toggle:hover { color: var(--text-primary); }
-
-.ai-status {
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  margin-top: 8px;
-  display: none;
-}
-.ai-status.visible { display: block; }
-.ai-status.success { background: rgba(16,185,129,0.15); color: #10b981; }
-.ai-status.error { background: rgba(239,68,68,0.15); color: #ef4444; }
-
-.ai-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ai-action-btn {
-  width: 100%;
-  text-align: left;
-  padding: 8px 12px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  font-size: 13px;
-  transition: all var(--transition);
-}
-.ai-action-btn:hover {
-  border-color: var(--accent-purple);
-  background: var(--accent-purple-dim);
-}
-
-.ai-custom-prompt textarea {
-  min-height: 60px;
-  resize: vertical;
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-}
-
-.ai-response-pane {
-  margin-top: 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 14px;
-  font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  font-family: system-ui, sans-serif;
-  min-height: 60px;
-  max-height: 300px;
-  overflow-y: auto;
-  display: none;
-}
-.ai-response-pane.visible { display: block; }
-.ai-response-pane .thinking {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   WELCOME STATE
-   ═══════════════════════════════════════════════════════════ */
-.welcome-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  pointer-events: none;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   DRAG PLACEHOLDER
-   ═══════════════════════════════════════════════════════════ */
-.drop-placeholder {
-  height: 4px;
-  background: var(--accent-purple);
-  border-radius: 2px;
-  margin: 2px 0;
-  transition: height var(--transition);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   RESPONSIVE
-   ═══════════════════════════════════════════════════════════ */
-@media (max-width: 1024px) {
-  #board-container {
-    overflow-x: auto;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   PREMIUM UPGRADE — Linear × Vercel × terminal aesthetic
-   ═══════════════════════════════════════════════════════════ */
-
-/* 1. PAGE BACKGROUND — subtle purple radial glow from top */
-body {
-  background:
-    radial-gradient(ellipse 80% 40% at 50% -10%,
-      rgba(124, 58, 237, 0.09) 0%,
-      transparent 65%),
-    #0f0f13;
-}
-
-/* 2. TOP BAR + TOOLBAR — frosted glass */
-#top-bar,
-#toolbar {
-  background: rgba(10, 10, 16, 0.88);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-}
-
-/* 3. COLUMNS — glass surface */
-.column {
-  background: rgba(22, 22, 32, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
-}
-
-/* 4. COLUMN HEADER — subtle tinted background */
-.column-header {
-  background: rgba(255, 255, 255, 0.025);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.column-name {
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 1.8px;
-  color: rgba(232, 232, 240, 0.9);
-}
-
-/* 5. CARDS — depth, gradient, left-border glow, hover lift */
-.card {
-  background: linear-gradient(160deg, #1e1e2f 0%, #17172280 100%);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 10px;
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.5),
-    0 4px 12px rgba(0, 0, 0, 0.25);
-  transition:
-    transform 140ms ease,
-    box-shadow 140ms ease,
-    border-color 140ms ease;
-}
-
-.card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(124, 58, 237, 0.3);
-  box-shadow:
-    0 6px 20px rgba(0, 0, 0, 0.45),
-    0 0 0 1px rgba(124, 58, 237, 0.2),
-    0 0 24px rgba(124, 58, 237, 0.06);
-}
-
-/* Left-border ambient glow per type */
-.card[data-type="AGENT"] {
-  border-left: 3px solid var(--type-agent);
-  box-shadow:
-    -3px 0 14px rgba(124, 58, 237, 0.18),
-    0 2px 10px rgba(0, 0, 0, 0.3);
-}
-.card[data-type="RESEARCH"] {
-  border-left: 3px solid var(--type-research);
-  box-shadow:
-    -3px 0 14px rgba(14, 165, 233, 0.18),
-    0 2px 10px rgba(0, 0, 0, 0.3);
-}
-.card[data-type="REPO"] {
-  border-left: 3px solid var(--type-repo);
-  box-shadow:
-    -3px 0 14px rgba(16, 185, 129, 0.18),
-    0 2px 10px rgba(0, 0, 0, 0.3);
-}
-.card[data-type="URL"] {
-  border-left: 3px solid var(--type-url);
-  box-shadow:
-    -3px 0 14px rgba(245, 158, 11, 0.18),
-    0 2px 10px rgba(0, 0, 0, 0.3);
-}
-.card[data-type="NOTE"] {
-  border-left: 3px solid var(--type-note);
-  box-shadow:
-    -3px 0 10px rgba(107, 114, 128, 0.12),
-    0 2px 10px rgba(0, 0, 0, 0.3);
-}
-.card[data-type="IDEA"] {
-  border-left: 3px solid var(--type-idea);
-  box-shadow:
-    -3px 0 14px rgba(236, 72, 153, 0.18),
-    0 2px 10px rgba(0, 0, 0, 0.3);
-}
-
-/* 6. CARD TITLE — slightly larger */
-.card-title {
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: rgba(232, 232, 240, 0.95);
-}
-
-/* 7. TYPE BADGES — glow per type */
-.card-tag.type-tag {
-  border-radius: 6px;
-  font-size: 11px;
-  letter-spacing: 0.6px;
-}
-
-.card-tag.type-tag[data-type="AGENT"]    { box-shadow: 0 0 10px rgba(124, 58, 237, 0.45); }
-.card-tag.type-tag[data-type="RESEARCH"] { box-shadow: 0 0 10px rgba(14, 165, 233, 0.45); }
-.card-tag.type-tag[data-type="REPO"]     { box-shadow: 0 0 10px rgba(16, 185, 129, 0.45); }
-.card-tag.type-tag[data-type="URL"]      { box-shadow: 0 0 10px rgba(245, 158, 11, 0.45); }
-.card-tag.type-tag[data-type="IDEA"]     { box-shadow: 0 0 10px rgba(236, 72, 153, 0.45); }
-
-/* 8. PRIMARY BUTTON — real glow */
-.btn-primary {
-  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
-  box-shadow:
-    0 0 18px rgba(124, 58, 237, 0.45),
-    0 2px 8px rgba(0, 0, 0, 0.35);
-  border-radius: 9px;
-  transition: box-shadow 140ms ease, transform 140ms ease;
-}
-
-.btn-primary:hover {
-  box-shadow:
-    0 0 28px rgba(124, 58, 237, 0.65),
-    0 4px 14px rgba(0, 0, 0, 0.4);
-  transform: translateY(-1px);
-}
-
-/* 9. INPUT FOCUS — accent ring */
-#quick-input:focus,
-#search-input:focus,
-.modal-field input:focus,
-.modal-field textarea:focus,
-.modal-field select:focus,
-.ai-field input:focus,
-.ai-field textarea:focus {
-  border-color: rgba(124, 58, 237, 0.65);
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
-}
-
-/* 10. MODAL — elevated glass */
-#modal {
-  background: rgba(18, 18, 28, 0.97);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.7),
-    0 0 0 1px rgba(124, 58, 237, 0.12);
-}
-
-#modal-overlay {
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-
-/* 11. AI PANEL — glass sidebar */
-#ai-panel {
-  background: rgba(13, 13, 20, 0.92);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-left: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-/* 12. CONTEXT MENU — premium dropdown */
-#context-menu {
-  background: rgba(20, 20, 30, 0.97);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(124,58,237,0.1);
-  border-radius: 10px;
-}
-
-/* 13. FILTER BUTTONS — active state sharper */
-.btn-ghost.active {
-  background: rgba(124, 58, 237, 0.2);
-  border-color: rgba(124, 58, 237, 0.6);
-  color: #a78bfa;
-  box-shadow: 0 0 12px rgba(124, 58, 237, 0.2);
-}
-
-/* 14. COLUMN EMPTY STATE — centered, no border */
-.column-empty {
-  border: none;
-  opacity: 0.4;
-  font-size: 13px;
-  flex-direction: column;
-  gap: 8px;
-  display: flex;
-  pointer-events: none;
-}
-
-/* 15. DRAG-OVER STATE — stronger highlight */
-.column-body.drag-over {
-  background: rgba(124, 58, 237, 0.08);
-  border: 2px dashed rgba(124, 58, 237, 0.5);
-  box-shadow: inset 0 0 24px rgba(124, 58, 237, 0.06);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   SUBTASKS & CHECKLISTS
-   ═══════════════════════════════════════════════════════════ */
-.subtask-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
-}
-.subtask-item:last-child { border-bottom: none; }
-.subtask-checkbox {
-  width: 15px !important;
-  height: 15px !important;
-  accent-color: var(--accent-purple);
-  cursor: pointer;
-}
-.subtask-text {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text-primary);
-  transition: color var(--transition);
-}
-.subtask-text.completed {
-  text-decoration: line-through;
-  color: var(--text-muted);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   ARCHIVE LIST ITEMS
-   ═══════════════════════════════════════════════════════════ */
-.archive-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: linear-gradient(160deg, #1e1e2f 0%, #17172280 100%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  transition: border-color var(--transition);
-}
-.archive-item:hover {
-  border-color: rgba(124, 58, 237, 0.25);
-}
-.archive-item-title {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-}
-.archive-item-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0d">
+  <meta name="description" content="General Manager — one calm place for work, life, ideas, commitments and the systems behind them.">
+  <title>General Manager</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<div id="app">
-  <!-- TOP BAR: Board title + Quick Capture + AI toggle -->
-  <div id="top-bar">
-    <input type="text" id="board-title" value="GeneralManager" spellcheck="false" aria-label="Board title">
-    <div id="quick-capture">
-      <input type="text" id="quick-input" placeholder='Capture a context, task, URL, repo, or idea…  ( / )' spellcheck="false" aria-label="Quick capture input">
-      <select id="quick-type-select" aria-label="Card type">
-        <option value="NOTE">📝 Note</option>
-        <option value="AGENT">🤖 Agent</option>
-        <option value="RESEARCH">🔬 Research</option>
-        <option value="REPO">📦 Repo</option>
-        <option value="URL">🔗 URL</option>
-        <option value="IDEA">💡 Idea</option>
-      </select>
-      <button class="btn btn-primary" id="quick-add-btn">+ Add</button>
-    </div>
-    <button class="btn btn-ghost" id="ai-toggle-btn" title="Toggle AI Panel (A)">🧠 AI</button>
-    <div id="user-profile" style="display:none; align-items:center; gap:8px; margin-left:8px; flex-shrink:0;">
-      <span id="user-email" style="font-size:12px; color:var(--text-muted); font-weight: 500; overflow:hidden; text-overflow:ellipsis; max-width:140px; white-space:nowrap;"></span>
-      <button class="btn btn-ghost btn-sm" id="logout-btn" title="Log Out" style="padding: 4px 8px;">Sign Out</button>
-    </div>
-  </div>
-
-  <!-- TOOLBAR -->
-  <div id="toolbar">
-    <input type="text" id="search-input" placeholder="Search cards…" aria-label="Search cards">
-    <div class="toolbar-separator"></div>
-    <div class="filter-group">
-      <span class="label">Type</span>
-      <button class="btn btn-ghost btn-sm type-filter active" data-type="ALL">All</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="AGENT" title="Agent">🤖</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="RESEARCH" title="Research">🔬</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="REPO" title="Repo">📦</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="URL" title="URL">🔗</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="NOTE" title="Note">📝</button>
-      <button class="btn btn-ghost btn-sm type-filter" data-type="IDEA" title="Idea">💡</button>
-    </div>
-    <div class="toolbar-separator"></div>
-    <div class="filter-group">
-      <span class="label">Priority</span>
-      <button class="btn btn-ghost btn-sm priority-filter active" data-priority="ALL">All</button>
-      <button class="btn btn-ghost btn-sm priority-filter" data-priority="HIGH">High</button>
-      <button class="btn btn-ghost btn-sm priority-filter" data-priority="MED">Med</button>
-      <button class="btn btn-ghost btn-sm priority-filter" data-priority="LOW">Low</button>
-    </div>
-    <div class="toolbar-right">
-      <button class="btn btn-ghost btn-sm" id="archive-view-btn" title="View archived cards">📦 Archive</button>
-      <button class="btn btn-ghost btn-sm" id="export-btn" title="Export board as JSON">📥 Export</button>
-      <button class="btn btn-ghost btn-sm" id="import-btn" title="Import board from JSON">📤 Import</button>
-      <input type="file" id="import-file" accept=".json" style="display:none">
-      <button class="btn btn-ghost btn-sm" id="clear-done-btn" title="Archive all Done cards">🧹 Clear Done</button>
-    </div>
-  </div>
-
-  <!-- MAIN AREA: Board + AI Panel -->
-  <div id="main-area">
-    <div id="board-container">
-      <!-- Columns rendered by JS -->
-    </div>
-    <!-- AI PANEL -->
-    <div id="ai-panel">
-      <div class="ai-panel-header">
-        <span>🧠</span>
-        <h3>AI Assistant</h3>
-        <button class="btn-icon" id="ai-close-btn" title="Close AI panel">✕</button>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">G</div>
+        <div class="brand-copy">
+          <input id="board-title" value="General Manager" aria-label="Workspace title" spellcheck="false">
+          <span>everything can come in · very little gets to interrupt you</span>
+        </div>
+        <div id="demo-badge" class="demo-badge hidden">Local demo · this browser · no cloud backup</div>
       </div>
-      <div class="ai-panel-body">
-        <!-- Config -->
-        <div class="ai-section">
-          <div class="ai-section-title">API Configuration</div>
-          <div class="ai-field">
-            <label>Base URL</label>
-            <div class="ai-presets">
-              <button class="btn btn-ghost btn-sm ai-preset" data-url="https://api.openai.com/v1">OpenAI</button>
-              <button class="btn btn-ghost btn-sm ai-preset" data-url="https://openrouter.ai/api/v1">OpenRouter</button>
-              <button class="btn btn-ghost btn-sm ai-preset" data-url="https://integrate.api.nvidia.com/v1">NVIDIA NIM</button>
-              <button class="btn btn-ghost btn-sm ai-preset" data-url="">Custom</button>
-            </div>
-            <input type="text" id="ai-base-url" placeholder="https://api.openai.com/v1" spellcheck="false">
+
+      <nav class="nav-tabs" aria-label="Workspace">
+        <button class="nav-tab active" data-view="desk">Desk</button>
+        <button class="nav-tab" data-view="inbox">Inbox <span id="inbox-nav-count"></span></button>
+        <button class="nav-tab" data-view="everything">Everything</button>
+      </nav>
+
+      <div class="top-actions">
+        <button class="btn btn-quiet" id="search-btn">Search <span class="keycap">⌘K</span></button>
+        <button class="btn btn-soft" id="regroup-btn">Regroup</button>
+        <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Open settings">⚙</button>
+        <div class="user-profile" id="user-profile">
+          <span id="user-email"></span>
+          <button class="btn btn-quiet btn-sm" id="logout-btn">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="desk-view" class="view">
+        <div class="desk-intro">
+          <div class="eyebrow" id="daypart-label">Your desk</div>
+          <h1 id="desk-heading">Your desk.</h1>
+          <p id="desk-subline">A small surface for what matters now. Everything else stays held.</p>
+
+          <div class="capture-bar">
+            <input id="quick-input" type="text" placeholder="Drop anything here — task, thought, promise, link, unfinished thing…" autocomplete="off" spellcheck="false">
+            <button class="btn btn-primary" id="quick-add-btn">Capture</button>
           </div>
-          <div class="ai-field">
-            <label>API Key</label>
-            <div class="api-key-wrapper">
-              <input type="password" id="ai-api-key" placeholder="sk-…" spellcheck="false" autocomplete="off">
-              <button class="api-key-toggle" id="api-key-toggle" type="button" title="Toggle visibility">👁</button>
-            </div>
-          </div>
-          <div class="ai-field">
-            <label>Model</label>
-            <input type="text" id="ai-model" placeholder="gpt-4o-mini" spellcheck="false">
-          </div>
-          <button class="btn btn-ghost btn-sm" id="ai-test-btn">🔌 Test Connection</button>
-          <div class="ai-status" id="ai-status"></div>
+          <div class="capture-hint">Press <span class="keycap">/</span> from anywhere. New things land safely in Inbox unless you decide otherwise.</div>
+          <div id="demo-mode-note" class="demo-mode-note hidden">Portfolio demo · saved locally in this browser · no cloud backup</div>
         </div>
 
-        <!-- Actions -->
-        <div class="ai-section">
-          <div class="ai-section-title">Actions</div>
-          <div class="ai-actions">
-            <button class="ai-action-btn" data-action="summarize">📋 Summarize Board</button>
-            <button class="ai-action-btn" data-action="priority">🎯 Suggest Priority</button>
-            <button class="ai-action-btn" data-action="stalled">⚠️ Find Stalled</button>
-            <button class="ai-action-btn" data-action="standup">📢 Generate Standup</button>
+        <section class="manager-band">
+          <div>
+            <span class="manager-label">Desk capacity</span>
+            <strong id="capacity-copy">Three things is enough.</strong>
           </div>
-        </div>
-
-        <!-- Custom Prompt -->
-        <div class="ai-section">
-          <div class="ai-section-title">Custom Prompt</div>
-          <div class="ai-custom-prompt">
-            <div class="ai-field">
-              <textarea id="ai-custom-input" placeholder="Ask anything about your board…" rows="3"></textarea>
-            </div>
-            <button class="btn btn-primary btn-sm" id="ai-ask-btn">Ask</button>
+          <div class="capacity-switch" id="capacity-switch">
+            <button data-capacity="LIGHT">Light · 1</button>
+            <button data-capacity="NORMAL" class="active">Normal · 3</button>
+            <button data-capacity="FULL">Full · 5</button>
           </div>
+          <div class="manager-brief" id="manager-brief"></div>
+        </section>
+
+        <section class="desk-section primary-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Now</span><h2>Your active desk</h2></div>
+            <span class="section-note">Finite on purpose.</span>
+          </div>
+          <div id="desk-now-list" class="now-grid"></div>
+        </section>
+
+        <section class="desk-section up-next-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Up next</span><h2>One good next candidate</h2></div>
+            <span class="section-note">Suggestion, not obligation.</span>
+          </div>
+          <div id="desk-next-list"></div>
+        </section>
+
+        <section class="desk-section" id="attention-section">
+          <div class="section-head">
+            <div><span class="eyebrow">Re-entry</span><h2>A short regroup is available</h2></div>
+          </div>
+          <div id="desk-attention-list" class="attention-list"></div>
+        </section>
+
+        <section class="quiet-zone" id="quiet-zone"></section>
+      </section>
+
+      <section id="inbox-view" class="view hidden">
+        <div class="page-head">
+          <div><span class="eyebrow">Inbox</span><h1>Decide one thing at a time.</h1><p>Capture freely. Organize only when it becomes useful.</p></div>
+          <div class="page-stat" id="inbox-count"></div>
         </div>
+        <div id="triage-stage" class="triage-stage"></div>
+        <div id="inbox-tail" class="inbox-tail"></div>
+      </section>
 
-        <!-- Response -->
-        <div class="ai-response-pane" id="ai-response"></div>
+      <section id="everything-view" class="view hidden">
+        <div class="page-head">
+          <div><span class="eyebrow">Everything</span><h1>The whole map, when you actually want it.</h1><p>This is storage and search — not your daily home screen.</p></div>
+          <button class="btn btn-quiet btn-sm" id="sources-link-btn">Source groups <span class="experimental-label">experimental</span></button>
+        </div>
+        <div class="everything-tools">
+          <input id="everything-search" type="search" placeholder="Search titles, context, areas, sources…">
+          <div id="state-filters" class="filter-row"></div>
+        </div>
+        <div id="everything-list" class="everything-list"></div>
+      </section>
+
+      <section id="sources-view" class="view hidden">
+        <div class="page-head">
+          <div><span class="eyebrow">Experimental</span><h1>Source groups.</h1><p>This currently groups stored items by origin. Connectors and event compression are future work.</p></div>
+        </div>
+        <div class="source-philosophy">
+          <strong>Harness rule</strong>
+          <p>Future direction: a noisy source should become one useful decision, not sixty notifications. This prototype does not yet ingest or compress external source events.</p>
+        </div>
+        <div id="sources-list" class="sources-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="inspector-backdrop" class="hidden"></div>
+  <aside id="inspector" class="hidden" aria-label="Item inspector">
+    <div class="inspector-head">
+      <span class="inspector-status" id="inspector-status">Autosaves</span>
+      <button class="btn btn-quiet btn-sm" id="copy-handoff-btn">Copy handoff</button>
+      <button class="icon-btn" id="inspector-close" title="Close">✕</button>
+    </div>
+    <div class="inspector-body">
+      <input id="item-title" class="title-input" placeholder="Untitled">
+      <div class="field hero-field">
+        <label for="item-next-action">Next move</label>
+        <input id="item-next-action" class="next-input" placeholder="What would make this move forward?">
       </div>
+      <div class="field-row three">
+        <div class="field"><label for="item-state">State</label><select id="item-state"></select></div>
+        <div class="field"><label for="item-priority">Priority</label><select id="item-priority"></select></div>
+        <div class="field"><label for="item-due">Date</label><input id="item-due" type="date"></div>
+      </div>
+      <div class="field"><label for="item-area">Area</label><input id="item-area" placeholder="Work, Home, Study…"></div>
+      <details class="detail-group">
+        <summary>Optional classification</summary>
+        <div class="field-row"><div class="field"><label for="item-kind">Kind</label><select id="item-kind"></select></div><div class="field"><label for="item-effort">Effort</label><select id="item-effort"></select></div></div>
+      </details>
+      <div class="field"><label for="item-waiting">Waiting on</label><input id="item-waiting" placeholder="Person, reply, event or dependency"></div>
+      <div class="field"><label for="item-notes">Context for future-you</label><textarea id="item-notes" placeholder="Enough context to resume without reconstructing the whole story."></textarea><div class="field-note" id="item-timestamps"></div></div>
+      <details class="detail-group">
+        <summary>Source / system context</summary>
+        <div class="field-row"><div class="field"><label for="item-source-label">Source</label><input id="item-source-label" placeholder="Hermes, Gmail, Client, Calendar…"></div><div class="field"><label for="item-tool">Tool / system</label><input id="item-tool" placeholder="Optional"></div></div>
+        <div class="field"><label for="item-source-url">Link</label><input id="item-source-url" placeholder="https://…" spellcheck="false"></div>
+      </details>
+      <div class="field"><label>Small steps</label><div id="item-checklist" class="checklist"></div><div class="check-add"><input id="check-input" placeholder="Add a concrete step"><button class="btn" id="check-add-btn">Add</button></div></div>
+
+      <section class="ai-strip demo-disabled">
+        <div class="ai-strip-head"><div><strong>Optional assist</strong><span>Only this item is sent.</span></div></div>
+        <div class="ai-actions">
+          <button class="btn btn-sm" data-ai-action="smaller">Make it smaller</button>
+          <button class="btn btn-sm" data-ai-action="resume">Resume me</button>
+          <button class="btn btn-sm" data-ai-action="clean">Clean context</button>
+          <button class="btn btn-sm" data-ai-action="handoff">AI handoff</button>
+        </div>
+        <div id="ai-item-output" class="ai-output hidden"></div>
+      </section>
+    </div>
+    <div class="inspector-actions">
+      <button class="btn" id="duplicate-item-btn">Duplicate</button>
+      <button class="btn" id="snooze-item-btn">Snooze 1 day</button>
+      <button class="btn btn-success" id="complete-item-btn">Done</button>
+      <button class="btn btn-danger" id="delete-item-btn">Delete</button>
+    </div>
+  </aside>
+
+  <div id="regroup-overlay" class="overlay hidden">
+    <div class="modal regroup-modal" role="dialog" aria-modal="true" aria-labelledby="regroup-title">
+      <div class="modal-head"><div><span class="eyebrow">Re-entry</span><h2 id="regroup-title">Regroup without catching up on everything.</h2></div><button class="icon-btn" data-close-overlay="regroup-overlay">✕</button></div>
+      <p class="modal-lede">Nothing here is a moral debt. We are only choosing what still deserves a place in front of you.</p>
+      <div id="regroup-list"></div>
+      <div class="modal-footer"><span id="regroup-footer-copy"></span><button class="btn btn-primary" id="regroup-done-btn">Back to desk</button></div>
     </div>
   </div>
-</div>
 
-<!-- Context Menu -->
-<div id="context-menu"></div>
-
-<!-- Archive Modal Overlay -->
-<div id="archive-overlay" style="position:fixed; inset:0; background:rgba(0,0,0,0.7); backdrop-filter:blur(6px); z-index:550; display:none; align-items:center; justify-content:center;">
-  <div id="archive-modal" style="background:rgba(18, 18, 28, 0.97); border:1px solid rgba(255, 255, 255, 0.08); border-radius:12px; width:600px; max-height:80vh; box-shadow:0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(124,58,237,0.12); padding:24px; display:flex; flex-direction:column;">
-    <div class="modal-title-row" style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
-      <h3 style="font-size:18px; font-weight:700; flex:1;">📦 Archived Cards</h3>
-      <button class="btn-icon" id="archive-close" style="font-size:20px;">✕</button>
-    </div>
-    <div style="margin-bottom:16px;">
-      <input type="text" id="archive-search-input" placeholder="Search archive…" spellcheck="false" style="width:100%; background:var(--bg-input); border:1px solid var(--border-color); border-radius:var(--radius); padding:8px 12px; color:var(--text-primary); transition:border-color var(--transition);">
-    </div>
-    <div id="archive-items-list" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:200px; max-height:45vh; padding-right:4px;">
-      <!-- Archived cards rendered here -->
-    </div>
-    <div class="modal-footer" style="display:flex; justify-content:space-between; gap:8px; margin-top:20px; padding-top:16px; border-top:1px solid var(--border-color);">
-      <button class="btn btn-ghost" id="archive-empty-btn" style="color:var(--priority-high)">🗑 Empty Archive</button>
-      <button class="btn btn-primary" id="archive-modal-close-btn">Done</button>
+  <div id="command-overlay" class="overlay hidden">
+    <div class="command-box" role="dialog" aria-modal="true" aria-label="Search and commands">
+      <input id="command-input" placeholder="Search anything or type a command…" autocomplete="off">
+      <div id="command-results"></div>
     </div>
   </div>
-</div>
 
-<!-- Detail Modal -->
-<div id="modal-overlay">
-  <div id="modal">
-    <div class="modal-title-row">
-      <input type="text" id="modal-title" placeholder="Card title" spellcheck="false">
-      <button class="btn-icon" id="modal-close">✕</button>
-    </div>
-    <div class="modal-row">
-      <div class="modal-field">
-        <label>Type</label>
-        <select id="modal-type">
-          <option value="AGENT">🤖 Agent</option>
-          <option value="RESEARCH">🔬 Research</option>
-          <option value="REPO">📦 Repo</option>
-          <option value="URL">🔗 URL</option>
-          <option value="NOTE">📝 Note</option>
-          <option value="IDEA">💡 Idea</option>
-        </select>
+  <div id="settings-overlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head"><h2 id="settings-title">Settings</h2><button class="icon-btn" data-close-overlay="settings-overlay">✕</button></div>
+      <div class="settings-grid demo-disabled" id="ai-settings-block">
+        <div class="callout"><strong>Manual mode is the product.</strong> AI is only an optional tool for a few explicit actions. Nothing on your desk requires a model.</div>
+        <div class="settings-row"><label for="ai-base-url">OpenAI-compatible base URL</label><input id="ai-base-url" placeholder="https://api.openai.com/v1"></div>
+        <div class="settings-row"><label for="ai-model">Model</label><input id="ai-model" placeholder="model name"></div>
+        <div class="settings-row"><label for="ai-api-key">API key</label><input id="ai-api-key" type="password" placeholder="key" autocomplete="off"></div>
+        <div class="field-row"><button class="btn" data-ai-preset="https://api.openai.com/v1">OpenAI</button><button class="btn" data-ai-preset="https://openrouter.ai/api/v1">OpenRouter</button></div>
+        <button class="btn" id="ai-test-btn">Test connection</button><div id="ai-status" class="field-note"></div>
       </div>
-      <div class="modal-field">
-        <label>Priority</label>
-        <select id="modal-priority">
-          <option value="HIGH">🔴 High</option>
-          <option value="MED">🟡 Medium</option>
-          <option value="LOW">⚫ Low</option>
-        </select>
-      </div>
-    </div>
-    <div class="modal-row">
-      <div class="modal-field">
-        <label>Column</label>
-        <select id="modal-column"></select>
-      </div>
-      <div class="modal-field">
-        <label>AI Model Tag</label>
-        <input type="text" id="modal-ai-model" placeholder="e.g. gpt-4o, gemini-3.5-flash">
-      </div>
-    </div>
-    <div class="modal-field">
-      <label>URL</label>
-      <input type="text" id="modal-url" class="url-display" placeholder="https://…" spellcheck="false">
-    </div>
-    <div class="modal-field">
-      <label>Checklist</label>
-      <div id="modal-checklist" style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px; max-height:160px; overflow-y:auto; padding-right:4px;">
-        <!-- Subtasks rendered here -->
-      </div>
-      <div style="display:flex; gap:8px;">
-        <input type="text" id="new-subtask-input" placeholder="Add a subtask..." spellcheck="false" style="flex:1; background:var(--bg-input); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:6px 10px; color:var(--text-primary);">
-        <button class="btn btn-ghost btn-sm" id="add-subtask-btn" type="button" style="padding:6px 12px;">+ Add</button>
-      </div>
-    </div>
-    <div class="modal-field">
-      <label>Notes</label>
-      <textarea id="modal-notes" placeholder="Add detailed notes…"></textarea>
-    </div>
-    <div class="modal-timestamps">
-      <span id="modal-created"></span>
-      <span id="modal-updated"></span>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="modal-delete-btn">🗑 Delete</button>
-      <button class="btn btn-ghost" id="modal-archive-btn">📦 Archive</button>
-      <button class="btn btn-primary" id="modal-save-btn">Save Changes</button>
+      <div class="modal-section"><h3>Data</h3><p class="field-note" id="storage-note">Cloud sync is experimental. The portfolio demo stores data only in this browser.</p><div class="field-row"><button class="btn" id="export-btn">Export JSON</button><button class="btn demo-disabled" id="import-btn">Import JSON</button><button class="btn demo-only hidden" id="reset-demo-btn">Reset demo data</button></div><input type="file" id="import-file" accept="application/json,.json" class="hidden demo-disabled"></div>
+      <div class="modal-footer"><button class="btn btn-primary" data-close-overlay="settings-overlay">Done</button></div>
     </div>
   </div>
-</div>
 
-<!-- ═══════════════════════════════════════════════════════════
-     FIREBASE — Compat SDK (v9 compat, no bundler required)
-     ══════════════════════════════════════════════════════════ -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
-<!-- ═══════════════════════════════════════════════════════════
-     APP SCRIPTS — loaded in dependency order
-     ══════════════════════════════════════════════════════════ -->
-<script src="firebase-config.js"></script>
-<script src="auth.js"></script>
-<script src="db.js"></script>
-<script src="app.js"></script>
+  <script src="/runtime.js"></script>
+  <script src="/bootstrap.js"></script>
 </body>
 </html>

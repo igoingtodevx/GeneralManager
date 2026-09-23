@@ -1,3 +1,5 @@
+> **Historical development document.** The current product contract is `LIFE_HARNESS.md`; this file is retained for context and must not be treated as current product truth.
+
 # MIGRATION_PLAN.md — GeneralManager localStorage → Firebase
 
 ## Old localStorage Behavior

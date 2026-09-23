@@ -1,180 +1,92 @@
-# FIREBASE_SETUP.md — GeneralManager
+# Firebase Setup — GeneralManager
 
-## Firebase Services Used
+GeneralManager uses Firebase Authentication and Cloud Firestore for per-user workspace sync. The vNext browser client remains a static deployment; there is no application backend or server-side AI proxy.
 
-| Service | Purpose |
-|---|---|
-| Firebase Authentication | Email/password sign-up and login |
-| Cloud Firestore | Board data, archive — per-user, synced across devices |
+## 1. Create / select a Firebase project
 
----
+Create a Firebase project in the Firebase console, then add a Web app. Copy the generated web configuration into `firebase-config.js`.
 
-## Step 1 — Create a Firebase Project
+The Firebase web configuration is a public client identifier. Security depends on Authentication and Firestore rules, not on hiding this configuration.
 
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Click **Add project**
-3. Name it (e.g. `general-manager-app`)
-4. Disable Google Analytics if not needed → **Create project**
+## 2. Enable Email/Password Authentication
 
----
+In Firebase Console:
 
-## Step 2 — Enable Authentication
+1. Open **Authentication**.
+2. Open **Sign-in method**.
+3. Enable **Email/Password**.
+4. Add every production/preview domain you actually intend to use under **Authorized domains** when Firebase requires it.
 
-1. In your project → **Build → Authentication**
-2. Click **Get started**
-3. Under **Sign-in method** → enable **Email/Password**
-4. Save
+GeneralManager currently blocks workspace access until Firebase reports an authenticated user.
 
----
+## 3. Create Cloud Firestore
 
-## Step 3 — Create a Firestore Database
+Create a Firestore database. The client stores data under:
 
-1. In your project → **Build → Firestore Database**
-2. Click **Create database**
-3. Choose **Production mode** (you'll add rules in Step 5)
-4. Choose your preferred region (e.g. `us-central1` or nearest to your users)
-5. Click **Enable**
-
----
-
-## Step 4 — Register a Web App
-
-1. Project home → click the **`</>`** (Web) icon → **Add app**
-2. Give it a nickname (e.g. `GeneralManager Web`)
-3. **Do NOT enable Firebase Hosting** (you're using Vercel)
-4. Copy the `firebaseConfig` object shown — it looks like:
-
-```js
-const firebaseConfig = {
-  apiKey:            "<YOUR_API_KEY>",
-  authDomain:        "<YOUR_PROJECT_ID>.firebaseapp.com",
-  projectId:         "<YOUR_PROJECT_ID>",
-  storageBucket:     "<YOUR_PROJECT_ID>.appspot.com",
-  messagingSenderId: "<YOUR_SENDER_ID>",
-  appId:             "<YOUR_APP_ID>"
-};
+```text
+users/{uid}/data/board
+users/{uid}/data/archive
 ```
 
-5. Open `firebase-config.js` and paste these values into the `FIREBASE_CONFIG` object.
+Deploy rules equivalent to the checked-in [`firestore.rules`](firestore.rules) so an authenticated user can only access their own subtree.
 
----
+Do not use permissive development rules for a public deployment.
 
-## Step 5 — Firestore Security Rules
+## 4. Deploy rules
 
-In Firebase Console → **Firestore Database → Rules**, paste:
-
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    // Each user can only read/write their own data
-    match /users/{userId}/data/{document} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId;
-    }
-
-    // Deny everything else
-    match /{document=**} {
-      allow read, write: if false;
-    }
-  }
-}
-```
-
-Click **Publish**.
-
----
-
-## Firestore Data Structure
-
-```
-users/
-  {userId}/
-    data/
-      board    → { columns: [], cards: [], meta: { boardTitle, lastType } }
-      archive  → { cards: [] }
-```
-
-- One `board` document per user (mirrors the in-memory JS object exactly)
-- One `archive` document per user
-- Max practical size: ~200 cards × 500 bytes = ~100 KB (well under the 1 MB doc limit)
-
----
-
-## Required Environment Variables
-
-The Firebase client config is **not secret** — it is safe in your source code. However, if you want to keep it out of version control:
-
-| Variable | Example value |
-|---|---|
-| (none required) | Paste directly in `firebase-config.js` |
-
-Alternatively, for a cleaner Vercel setup, inject via a `window.__firebaseConfig` script (see Vercel section below).
-
----
-
-## Step 6 — Vercel Deployment
-
-### 6a. Push to GitHub
-```bash
-git add .
-git commit -m "Add Firebase Auth + Firestore"
-git push
-```
-
-### 6b. Import to Vercel
-1. Go to [vercel.com](https://vercel.com) → **Add New Project**
-2. Import your GitHub repo
-3. **Framework Preset**: Other (it's a static site)
-4. Leave Build Command and Output Directory empty
-5. Click **Deploy**
-
-### 6c. Add Authorized Domain in Firebase Auth
-
-> [!IMPORTANT]
-> This step is required for login to work on your Vercel domain.
-
-1. Firebase Console → **Authentication → Settings → Authorized domains**
-2. Click **Add domain**
-3. Add your Vercel domain: e.g. `general-manager.vercel.app`
-4. If you have a custom domain: also add `yourdomain.com`
-
-### 6d. (Optional) Environment Variable Injection
-
-If you want to keep `firebase-config.js` clean of values, inject via `vercel.json`:
-
-Create a `public/_headers` or use a Vercel Edge Config. Simpler: just paste the config values directly in `firebase-config.js` — they are public client credentials.
-
----
-
-## Step 7 — Local Testing
-
-Open `index.html` directly in your browser (via a local HTTP server, not `file://` — Firebase SDK requires HTTP):
+With the Firebase CLI configured for the target project:
 
 ```bash
-# Using Python (quickest, no install needed)
-python -m http.server 8080
-
-# Or using npx serve
-npx serve .
+firebase deploy --only firestore:rules
 ```
 
-Then visit `http://localhost:8080`
+The repository includes `.firebaserc`, `firebase.json`, and `firestore.rules`; verify the selected project before deploying rules.
 
-> [!NOTE]
-> Add `localhost` to Firebase Auth → Authorized Domains (it may already be there by default).
+## 5. Run locally
 
----
+Serve the repository over HTTP:
 
-## Manual Checklist
+```bash
+python3 -m http.server 8080
+```
 
-- [ ] Firebase project created
-- [ ] Email/Password Authentication enabled
-- [ ] Firestore database created (Production mode)
-- [ ] Web App registered → config copied into `firebase-config.js`
-- [ ] Firestore Security Rules published
-- [ ] App deployed to Vercel
-- [ ] Vercel domain added to Firebase Auth → Authorized Domains
-- [ ] Tested: sign up, sign in, logout, data persists across reload
-- [ ] Tested: import banner works for localStorage migration
+Then open:
+
+```text
+http://localhost:8080
+```
+
+If local authentication is rejected, add `localhost` to Firebase Authentication's authorized domains.
+
+## 6. Vercel / static hosting
+
+No build command is required. The repository is static HTML/CSS/JavaScript and `vercel.json` rewrites requests to `index.html`.
+
+For a preview deployment, remember that Firebase Authentication may require the preview hostname to be authorized before sign-in can succeed. Production merge should not be used as a substitute for preview testing.
+
+## 7. Existing LocalStorage users
+
+When an authenticated account has no Firestore board yet and old `gm_board` data exists in LocalStorage, GeneralManager offers a one-time import. Import writes board/archive data to Firestore and clears the old board/archive LocalStorage keys after success.
+
+`gm_settings` stays device-local by design.
+
+## 8. AI credentials are separate
+
+Optional AI actions call the configured OpenAI-compatible endpoint directly from the browser.
+
+- AI API keys are **not** stored in Firestore.
+- The JSON backup intentionally omits the API key.
+- The browser currently stores the key in LocalStorage, which is convenient for a personal device but is not a secure secret store.
+- A future desktop build should use an OS-backed secret store instead of carrying this mechanism over unchanged.
+
+## 9. Pre-production checks
+
+Before merging a major UI/data-flow change:
+
+- confirm sign-up/sign-in/sign-out on the preview domain;
+- verify the workspace reloads from Firestore after a hard refresh;
+- edit a card and confirm the save indicator reaches `Synced`;
+- confirm another account cannot read the first account's data;
+- export a backup and verify it contains no AI API key;
+- test old LocalStorage import only with a disposable account/data set;
+- verify Firestore rules are the deployed production rules, not only the checked-in file.
