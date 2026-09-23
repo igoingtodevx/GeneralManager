@@ -1,5 +1,16 @@
 # CHANGELOG.md — GeneralManager
 
+## Unreleased — Life Harness portfolio pass
+
+- Added a real local portfolio demo path with synthetic seed data, immediate browser persistence, no Firebase/AI dependency, and a single-writer tab lock.
+- Enforced Desk capacity when items enter `NOW`; duplicates of active items start in Queue instead of creating hidden commitments.
+- Made Regroup finite: at most three frozen decisions per session with no automatic refill and explicit deferral.
+- Added Inbox Skip and Discard so unclear input does not block later captures.
+- Fixed snooze/Queue semantics and date-only local-calendar handling.
+- Removed Sources from primary navigation and labeled source grouping as experimental rather than connector/event-compression functionality.
+- Replaced shell-only browser smoke with behavior checks for demo boot, capture+reload, capacity rejection, triage and finite Regroup.
+- Added responsive 1024px header handling and tightened demo trust copy.
+
 ## Unreleased — General Manager vNext
 
 ### Product model

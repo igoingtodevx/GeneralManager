@@ -5,11 +5,15 @@ import {
   normalizeWorkspace,
   captureItem,
   setItemState,
+  canSetItemState,
+  duplicateItem,
   deskItems,
   regroupCandidates,
   sourceGroups,
   briefStats,
-  itemToHandoff
+  itemToHandoff,
+  dueInfo,
+  isAvailable
 } from '../core.js';
 
 const DAY = 86_400_000;
@@ -104,4 +108,49 @@ test('brief and handoff remain deterministic without AI', () => {
   const text = itemToHandoff(item);
   assert.match(text, /Next action: Test re-entry/);
   assert.match(text, /Area: Product/);
+});
+
+
+test('NOW capacity is enforced at the state boundary', () => {
+  const workspace = createDefaultWorkspace(0);
+  workspace.meta.capacityMode = 'LIGHT';
+  const active = captureItem(workspace, { title: 'Active', state: 'NOW' }, 10);
+  const queued = captureItem(workspace, { title: 'Queued', state: 'QUEUE' }, 20);
+  assert.equal(canSetItemState(workspace, queued.id, 'NOW').ok, false);
+  assert.equal(setItemState(workspace, queued.id, 'NOW', 30), null);
+  assert.equal(active.state, 'NOW');
+  assert.equal(queued.state, 'QUEUE');
+  assert.deepEqual(deskItems(workspace, 40).map(item => item.title), ['Active']);
+});
+
+test('duplicating an active commitment does not create a second NOW item', () => {
+  const workspace = createDefaultWorkspace(0);
+  const active = captureItem(workspace, { title: 'Active', state: 'NOW' }, 10);
+  const copy = duplicateItem(workspace, active.id, 20);
+  assert.equal(copy.state, 'QUEUE');
+  assert.equal(workspace.items.filter(item => item.state === 'NOW').length, 1);
+});
+
+test('date-only deadlines are local calendar days, not UTC-midnight deadlines', () => {
+  const now = new Date(2026, 8, 23, 16, 30, 0).getTime();
+  const today = dueInfo({ dueAt: '2026-09-23' }, now);
+  const tomorrow = dueInfo({ dueAt: '2026-09-24' }, now);
+  const yesterday = dueInfo({ dueAt: '2026-09-22' }, now);
+  assert.equal(today.overdue, false);
+  assert.equal(today.days, 0);
+  assert.equal(tomorrow.days, 1);
+  assert.equal(yesterday.overdue, true);
+});
+
+test('snooze and regroup deferral keep items out until their explicit return time', () => {
+  const now = 20 * DAY;
+  const workspace = createDefaultWorkspace(now);
+  const item = captureItem(workspace, { title: 'Deferred', state: 'QUEUE' }, now - 10 * DAY);
+  item.priority = 'HIGH';
+  item.snoozedUntil = new Date(now + DAY).toISOString();
+  assert.equal(isAvailable(item, now), false);
+  item.snoozedUntil = '';
+  item.reviewAfter = new Date(now + DAY).toISOString();
+  assert.equal(regroupCandidates(workspace, now).some(entry => entry.item.id === item.id), false);
+  assert.equal(regroupCandidates(workspace, now + 2 * DAY).some(entry => entry.item.id === item.id), true);
 });

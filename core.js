@@ -74,6 +74,24 @@ function migrateLegacyBoard(input, now = Date.now()) {
   return workspace;
 }
 
+export function createDemoWorkspace(now = Date.now()) {
+  const workspace = createDefaultWorkspace(now);
+  workspace.meta.title = 'General Manager';
+  const add = (title, state, extra = {}) => {
+    const item = captureItem(workspace, { title, state, kind: extra.kind || 'TASK', sourceLabel: extra.sourceLabel || '', sourceUrl: extra.sourceUrl || '' }, now - (extra.ageDays || 0) * DAY);
+    Object.assign(item, extra);
+    delete item.ageDays;
+    return item;
+  };
+  add('Send the finished landing page to the client', 'NOW', { nextAction: 'Open the final preview and send the link', priority: 'HIGH', area: 'Client work', effort: 'QUICK' });
+  add('Prepare one strong AI outreach message', 'QUEUE', { nextAction: 'Pick one person and write a specific 5-line opener', priority: 'HIGH', area: 'Work', effort: 'MEDIUM' });
+  add('Buy laundry detergent', 'INBOX', { area: 'Home', effort: 'QUICK' });
+  add('Article about agent harness design', 'INBOX', { kind: 'REFERENCE', sourceLabel: 'Reading list', sourceUrl: 'https://example.com/agent-harness', ageDays: 4 });
+  add('Client feedback on video intro', 'WAITING', { waitingOn: 'Client reply', area: 'Client work', ageDays: 8 });
+  add('Portfolio case-study idea', 'LATER', { kind: 'IDEA', notes: 'Show how capability discovery + composition became a repeatable workflow.', area: 'Portfolio' });
+  return workspace;
+}
+
 export function normalizeWorkspace(input, now = Date.now()) {
   if (!input || typeof input !== 'object') return createDefaultWorkspace(now);
   if (Array.isArray(input.cards) || Array.isArray(input.columns)) return migrateLegacyBoard(input, now);
@@ -111,6 +129,7 @@ export function normalizeItem(item = {}, now = Date.now()) {
     tool: String(item.tool || '').trim(),
     dueAt: item.dueAt || '',
     snoozedUntil: item.snoozedUntil || '',
+    reviewAfter: item.reviewAfter || '',
     pinned: !!item.pinned,
     subtasks: Array.isArray(item.subtasks) ? item.subtasks.map(step => ({
       id: step.id || makeId(),
@@ -124,19 +143,38 @@ export function normalizeItem(item = {}, now = Date.now()) {
 }
 
 export function captureItem(workspace, { title, kind = 'TASK', sourceUrl = '', sourceLabel = '', state = 'INBOX' } = {}, now = Date.now()) {
-  const item = normalizeItem({ title, kind, sourceUrl, sourceLabel, state, createdAt: now, updatedAt: now }, now);
+  const limit = CAPACITY_SLOTS[workspace?.meta?.capacityMode] || 3;
+  const safeState = state === 'NOW' && activeCommitmentCount(workspace) >= limit ? 'QUEUE' : state;
+  const item = normalizeItem({ title, kind, sourceUrl, sourceLabel, state: safeState, createdAt: now, updatedAt: now }, now);
   workspace.items.push(item);
   workspace.meta.lastCaptureKind = item.kind;
   return item;
 }
 
-export function setItemState(workspace, itemId, state, now = Date.now()) {
+export function activeCommitmentCount(workspace, exceptId = '') {
+  return workspace.items.filter(item => item.state === 'NOW' && item.id !== exceptId).length;
+}
+
+export function canSetItemState(workspace, itemId, state) {
   const item = workspace.items.find(candidate => candidate.id === itemId);
-  if (!item || !STATES.includes(state)) return null;
+  if (!item) return { ok: false, reason: 'Item not found.' };
+  if (!STATES.includes(state)) return { ok: false, reason: 'Unknown state.' };
+  if (state !== 'NOW' || item.state === 'NOW') return { ok: true, reason: '' };
+  const limit = CAPACITY_SLOTS[workspace?.meta?.capacityMode] || 3;
+  const active = activeCommitmentCount(workspace, itemId);
+  if (active >= limit) return { ok: false, reason: `Your desk is full (${active}/${limit}). Move something off the desk first.` };
+  return { ok: true, reason: '' };
+}
+
+export function setItemState(workspace, itemId, state, now = Date.now()) {
+  const gate = canSetItemState(workspace, itemId, state);
+  if (!gate.ok) return null;
+  const item = workspace.items.find(candidate => candidate.id === itemId);
   item.state = state;
   item.updatedAt = now;
   item.completedAt = state === 'DONE' ? now : null;
   if (state !== 'WAITING') item.waitingOn = item.waitingOn || '';
+  if (state !== 'LATER') item.reviewAfter = '';
   return item;
 }
 
@@ -147,7 +185,7 @@ export function duplicateItem(workspace, itemId, now = Date.now()) {
     ...structuredClone(item),
     id: makeId(),
     title: `${item.title} (copy)`,
-    state: item.state === 'DONE' ? 'QUEUE' : item.state,
+    state: ['DONE', 'NOW'].includes(item.state) ? 'QUEUE' : item.state,
     createdAt: now,
     updatedAt: now,
     completedAt: null
@@ -164,10 +202,23 @@ export function isAvailable(item, now = Date.now()) {
 
 export function dueInfo(item, now = Date.now()) {
   if (!item.dueAt) return { hasDue: false, overdue: false, ms: Infinity, days: Infinity };
-  const due = Date.parse(item.dueAt);
+  const raw = String(item.dueAt);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly.map(Number);
+    const dueDate = new Date(year, month - 1, day, 23, 59, 59, 999);
+    if (Number.isNaN(dueDate.getTime())) return { hasDue: false, overdue: false, ms: Infinity, days: Infinity };
+    const current = new Date(now);
+    const dueKey = Date.UTC(year, month - 1, day) / DAY;
+    const nowKey = Date.UTC(current.getFullYear(), current.getMonth(), current.getDate()) / DAY;
+    const days = Math.round(dueKey - nowKey);
+    const ms = dueDate.getTime() - now;
+    return { hasDue: true, overdue: days < 0, ms, days, timestamp: dueDate.getTime(), dateOnly: true };
+  }
+  const due = Date.parse(raw);
   if (!Number.isFinite(due)) return { hasDue: false, overdue: false, ms: Infinity, days: Infinity };
   const ms = due - now;
-  return { hasDue: true, overdue: ms < 0, ms, days: Math.ceil(ms / DAY), timestamp: due };
+  return { hasDue: true, overdue: ms < 0, ms, days: Math.ceil(ms / DAY), timestamp: due, dateOnly: false };
 }
 
 export function staleInfo(item, now = Date.now()) {
@@ -197,11 +248,9 @@ export function attentionScore(item, now = Date.now()) {
 }
 
 export function deskItems(workspace, now = Date.now()) {
-  const limit = CAPACITY_SLOTS[workspace?.meta?.capacityMode] || 3;
   return workspace.items
     .filter(item => item.state === 'NOW' && isAvailable(item, now))
-    .sort((a, b) => attentionScore(b, now) - attentionScore(a, now) || b.updatedAt - a.updatedAt)
-    .slice(0, limit);
+    .sort((a, b) => attentionScore(b, now) - attentionScore(a, now) || b.updatedAt - a.updatedAt);
 }
 
 export function inboxItems(workspace, now = Date.now()) {
@@ -218,7 +267,11 @@ export function waitingItems(workspace) {
 
 export function regroupCandidates(workspace, now = Date.now(), limit = 7) {
   const candidates = workspace.items
-    .filter(item => item.state !== 'DONE' && isAvailable(item, now))
+    .filter(item => {
+      if (item.state === 'DONE' || !isAvailable(item, now)) return false;
+      const reviewAt = item.reviewAfter ? Date.parse(item.reviewAfter) : NaN;
+      return !Number.isFinite(reviewAt) || reviewAt <= now;
+    })
     .map(item => {
       const due = dueInfo(item, now);
       const stale = staleInfo(item, now);

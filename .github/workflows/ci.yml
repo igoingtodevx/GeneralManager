@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: ["main", "feat/general-manager-os"]
+    branches: ["main", "feat/general-manager-os", "feat/general-manager-life-harness"]
   pull_request:
 
 jobs:
@@ -14,8 +14,8 @@ jobs:
         with:
           node-version: 22
       - name: Syntax check
-        run: node --check core.js && node --check app.js
+        run: node --check core.js && node --check app.js && node --check runtime.js && node --check bootstrap.js && node --check harness-db.js && node --check auth.js && node --check db.js
       - name: Core tests
         run: npm test
-      - name: Browser smoke
+      - name: Portfolio demo browser smoke
         run: bash tests/browser-smoke.sh

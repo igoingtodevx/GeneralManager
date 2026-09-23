@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b0b0d">
   <meta name="description" content="General Manager — one calm place for work, life, ideas, commitments and the systems behind them.">
   <title>General Manager</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div id="app">
@@ -17,13 +17,13 @@
           <input id="board-title" value="General Manager" aria-label="Workspace title" spellcheck="false">
           <span>everything can come in · very little gets to interrupt you</span>
         </div>
+        <div id="demo-badge" class="demo-badge hidden">Local demo · this browser · no cloud backup</div>
       </div>
 
       <nav class="nav-tabs" aria-label="Workspace">
         <button class="nav-tab active" data-view="desk">Desk</button>
         <button class="nav-tab" data-view="inbox">Inbox <span id="inbox-nav-count"></span></button>
         <button class="nav-tab" data-view="everything">Everything</button>
-        <button class="nav-tab" data-view="sources">Sources</button>
       </nav>
 
       <div class="top-actions">
@@ -49,6 +49,7 @@
             <button class="btn btn-primary" id="quick-add-btn">Capture</button>
           </div>
           <div class="capture-hint">Press <span class="keycap">/</span> from anywhere. New things land safely in Inbox unless you decide otherwise.</div>
+          <div id="demo-mode-note" class="demo-mode-note hidden">Portfolio demo · saved locally in this browser · no cloud backup</div>
         </div>
 
         <section class="manager-band">
@@ -80,10 +81,9 @@
           <div id="desk-next-list"></div>
         </section>
 
-        <section class="desk-section">
+        <section class="desk-section" id="attention-section">
           <div class="section-head">
-            <div><span class="eyebrow">Attention</span><h2>A few things worth a decision</h2></div>
-            <button class="btn btn-quiet btn-sm" id="attention-regroup-btn">Open Regroup</button>
+            <div><span class="eyebrow">Re-entry</span><h2>A short regroup is available</h2></div>
           </div>
           <div id="desk-attention-list" class="attention-list"></div>
         </section>
@@ -103,6 +103,7 @@
       <section id="everything-view" class="view hidden">
         <div class="page-head">
           <div><span class="eyebrow">Everything</span><h1>The whole map, when you actually want it.</h1><p>This is storage and search — not your daily home screen.</p></div>
+          <button class="btn btn-quiet btn-sm" id="sources-link-btn">Source groups <span class="experimental-label">experimental</span></button>
         </div>
         <div class="everything-tools">
           <input id="everything-search" type="search" placeholder="Search titles, context, areas, sources…">
@@ -113,11 +114,11 @@
 
       <section id="sources-view" class="view hidden">
         <div class="page-head">
-          <div><span class="eyebrow">Sources</span><h1>The layer underneath the manager.</h1><p>Apps, people, agents and feeds can create input. They do not get to own your attention.</p></div>
+          <div><span class="eyebrow">Experimental</span><h1>Source groups.</h1><p>This currently groups stored items by origin. Connectors and event compression are future work.</p></div>
         </div>
         <div class="source-philosophy">
           <strong>Harness rule</strong>
-          <p>A noisy source should become one useful decision, not sixty notifications. Source connections are optional; General Manager still works as a complete manual system.</p>
+          <p>Future direction: a noisy source should become one useful decision, not sixty notifications. This prototype does not yet ingest or compress external source events.</p>
         </div>
         <div id="sources-list" class="sources-list"></div>
       </section>
@@ -139,14 +140,14 @@
       </div>
       <div class="field-row three">
         <div class="field"><label for="item-state">State</label><select id="item-state"></select></div>
-        <div class="field"><label for="item-kind">Kind</label><select id="item-kind"></select></div>
-        <div class="field"><label for="item-effort">Effort</label><select id="item-effort"></select></div>
-      </div>
-      <div class="field-row three">
         <div class="field"><label for="item-priority">Priority</label><select id="item-priority"></select></div>
         <div class="field"><label for="item-due">Date</label><input id="item-due" type="date"></div>
-        <div class="field"><label for="item-area">Area</label><input id="item-area" placeholder="Work, Home, Study…"></div>
       </div>
+      <div class="field"><label for="item-area">Area</label><input id="item-area" placeholder="Work, Home, Study…"></div>
+      <details class="detail-group">
+        <summary>Optional classification</summary>
+        <div class="field-row"><div class="field"><label for="item-kind">Kind</label><select id="item-kind"></select></div><div class="field"><label for="item-effort">Effort</label><select id="item-effort"></select></div></div>
+      </details>
       <div class="field"><label for="item-waiting">Waiting on</label><input id="item-waiting" placeholder="Person, reply, event or dependency"></div>
       <div class="field"><label for="item-notes">Context for future-you</label><textarea id="item-notes" placeholder="Enough context to resume without reconstructing the whole story."></textarea><div class="field-note" id="item-timestamps"></div></div>
       <details class="detail-group">
@@ -156,7 +157,7 @@
       </details>
       <div class="field"><label>Small steps</label><div id="item-checklist" class="checklist"></div><div class="check-add"><input id="check-input" placeholder="Add a concrete step"><button class="btn" id="check-add-btn">Add</button></div></div>
 
-      <section class="ai-strip">
+      <section class="ai-strip demo-disabled">
         <div class="ai-strip-head"><div><strong>Optional assist</strong><span>Only this item is sent.</span></div></div>
         <div class="ai-actions">
           <button class="btn btn-sm" data-ai-action="smaller">Make it smaller</button>
@@ -180,7 +181,7 @@
       <div class="modal-head"><div><span class="eyebrow">Re-entry</span><h2 id="regroup-title">Regroup without catching up on everything.</h2></div><button class="icon-btn" data-close-overlay="regroup-overlay">✕</button></div>
       <p class="modal-lede">Nothing here is a moral debt. We are only choosing what still deserves a place in front of you.</p>
       <div id="regroup-list"></div>
-      <div class="modal-footer"><span id="regroup-footer-copy"></span><button class="btn btn-primary" data-close-overlay="regroup-overlay">Back to desk</button></div>
+      <div class="modal-footer"><span id="regroup-footer-copy"></span><button class="btn btn-primary" id="regroup-done-btn">Back to desk</button></div>
     </div>
   </div>
 
@@ -194,7 +195,7 @@
   <div id="settings-overlay" class="overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="modal-head"><h2 id="settings-title">Settings</h2><button class="icon-btn" data-close-overlay="settings-overlay">✕</button></div>
-      <div class="settings-grid">
+      <div class="settings-grid demo-disabled" id="ai-settings-block">
         <div class="callout"><strong>Manual mode is the product.</strong> AI is only an optional tool for a few explicit actions. Nothing on your desk requires a model.</div>
         <div class="settings-row"><label for="ai-base-url">OpenAI-compatible base URL</label><input id="ai-base-url" placeholder="https://api.openai.com/v1"></div>
         <div class="settings-row"><label for="ai-model">Model</label><input id="ai-model" placeholder="model name"></div>
@@ -202,19 +203,14 @@
         <div class="field-row"><button class="btn" data-ai-preset="https://api.openai.com/v1">OpenAI</button><button class="btn" data-ai-preset="https://openrouter.ai/api/v1">OpenRouter</button></div>
         <button class="btn" id="ai-test-btn">Test connection</button><div id="ai-status" class="field-note"></div>
       </div>
-      <div class="modal-section"><h3>Data</h3><p class="field-note">Cloud sync is currently backed by Firebase. The manager model itself does not depend on Firebase and can move to local-first desktop storage later.</p><div class="field-row"><button class="btn" id="export-btn">Export JSON</button><button class="btn" id="import-btn">Import / merge JSON</button></div><input type="file" id="import-file" accept="application/json,.json" class="hidden"></div>
+      <div class="modal-section"><h3>Data</h3><p class="field-note" id="storage-note">Cloud sync is experimental. The portfolio demo stores data only in this browser.</p><div class="field-row"><button class="btn" id="export-btn">Export JSON</button><button class="btn demo-disabled" id="import-btn">Import JSON</button><button class="btn demo-only hidden" id="reset-demo-btn">Reset demo data</button></div><input type="file" id="import-file" accept="application/json,.json" class="hidden demo-disabled"></div>
       <div class="modal-footer"><button class="btn btn-primary" data-close-overlay="settings-overlay">Done</button></div>
     </div>
   </div>
 
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-  <script src="firebase-config.js"></script>
-  <script src="auth.js"></script>
-  <script src="db.js"></script>
-  <script type="module" src="app.js"></script>
+  <script src="/runtime.js"></script>
+  <script src="/bootstrap.js"></script>
 </body>
 </html>

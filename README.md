@@ -1,76 +1,119 @@
 # General Manager
 
-General Manager is an experiment in building **one calm control surface above work, life, apps, agents and unfinished commitments**.
+**General Manager separates capture from commitment and turns returning after interruption into a few deliberate decisions instead of a full cleanup session.**
 
-The product thesis is simple:
+It started as a Kanban/task-manager experiment. The current product direction is intentionally different: the system may contain a lot, but the user should rarely have to look at a lot.
 
 > Everything can come in. Very little gets to interrupt you.
 
-It is deliberately not another Kanban board, not an AI chat wrapped around a todo list, and not a system that only works while perfectly maintained.
+## Portfolio demo
 
-## Core model
+Open a deployment at `/demo` (or add `?demo=1`).
 
-Everything enters as an item, but the user does not live in a backlog.
+The portfolio demo is deliberately self-contained:
 
-- **Desk** — a deliberately finite attention surface. Capacity is 1, 3 or 5 items.
-- **Inbox** — capture freely, then triage one item at a time.
-- **Everything** — the full searchable map, available when needed but never the default daily view.
-- **Sources** — the layer for apps, people, agents, feeds and automations. Sources may create input; they do not get to own attention.
-- **Regroup** — a re-entry flow after absence or pile-up. It surfaces only a few meaningful decisions instead of forcing the user to process the entire debt pile.
+- no account or login;
+- no Firebase SDK or database request;
+- no AI/API key;
+- synthetic example data on first start;
+- immediate local persistence in this browser;
+- a single-writer browser lock prevents two demo tabs from silently overwriting each other;
+- export works; import is disabled in demo mode.
 
-Internally, items still have lightweight states (`INBOX`, `NOW`, `QUEUE`, `WAITING`, `LATER`, `DONE`), but those states are an implementation detail rather than the interface metaphor.
+The interface labels this boundary explicitly. The demo is not presented as cloud-backed or production-ready.
 
-## Why this exists
+### Proof surfaces
 
-Most productivity systems fail exactly when life gets messy. Once there are multiple lists, ignored reminders, unread agent runs, old follow-ups and half-finished projects, the system itself becomes another source of pressure.
+**Finite Desk**
 
-General Manager is designed around the opposite assumption: **the user will periodically disappear, ignore things, change tools and come back to chaos.** Re-entry is therefore a first-class workflow, not an edge case.
+![General Manager finite Desk](docs/screenshots/01-desk.png)
 
-## Current experiment
+**Finite Regroup**
 
-- Finite Desk capacity with Light (1), Normal (3) and Full (5) modes.
-- Universal capture for tasks, projects, follow-ups, ideas, references and routines.
-- One-at-a-time Inbox triage.
-- Deterministic attention scoring based on explicit state, priority and dates.
-- Regroup candidates for stale active work, old waiting items, aging Inbox items and near/overdue dates.
-- Searchable Everything view.
-- Source grouping so repeated inputs can eventually be summarized below the attention layer.
-- Autosaving item inspector with next move, area, effort, date, waiting context, source context and small steps.
-- Deterministic local handoff text that works without AI.
-- Optional item-level AI actions: make the next move smaller, create a re-entry brief, clean context, or prepare a handoff.
-- Keyboard capture (`/`) and universal search / commands (`Ctrl/Cmd + K`).
+![General Manager finite Regroup](docs/screenshots/02-regroup.png)
 
-## AI boundary
+**One-at-a-time Inbox**
 
-Manual mode is the complete product. Capture, triage, search, state changes, regrouping, source grouping, export/import and local handoffs do not require a model.
+![General Manager Inbox triage](docs/screenshots/03-inbox.png)
 
-AI is only invoked by explicit actions on a single item. There is no requirement to send the whole workspace to a model.
+## The core interaction model
 
-The current browser prototype calls an OpenAI-compatible endpoint directly. API credentials remain in browser `localStorage`, which is suitable for a private prototype but not for a hardened desktop product.
+### 1. Capture first
 
-## Storage safety
+Quick Capture asks for the thing, not its taxonomy. A task, thought, promise, link or unfinished thread can enter without choosing a project, priority or workflow first.
 
-This branch is intentionally isolated from the existing GeneralManager board model.
+### 2. Commit deliberately
 
-- Existing production data remains in `users/{uid}/data/board`.
-- The life-harness experiment writes to `users/{uid}/data/harness-v3`.
-- On first use, the experiment may read the old board as a seed and migrate it in memory.
-- It never rewrites the legacy board document.
+`NOW` is an actual commitment, not merely a card that happens to be visible. Desk capacity is enforced at the state boundary:
 
-This allows the old product and the experiment to be used in parallel without destructive migration.
+- Light — 1 active commitment
+- Normal — 3
+- Full — 5
+
+If the Desk is full, another item cannot silently become `NOW`. Queue remains outside the commitment budget, and the Desk may show one quiet **Up next** candidate.
+
+### 3. Triage one thing at a time
+
+Inbox deliberately shows one captured item. The user can move it to Now, Queue, Waiting or Keep, open details, **skip it for this pass**, or discard it without counting it as completed work.
+
+### 4. Regroup has an end
+
+Regroup is a re-entry flow for stale work, old waiting items, aging Inbox captures and explicit date signals.
+
+A session freezes at **at most three decisions** when opened. It does not refill from the backlog after every click. `Keep for now` and `Later` defer that decision so the same item does not immediately reappear.
+
+The user can ignore Regroup entirely and continue working on the Desk.
+
+### 5. Everything stays retrievable
+
+Everything is the searchable full map. It exists for retrieval and deliberate planning, not as the default daily surface.
+
+## What is implemented today
+
+- universal capture with no metadata requirement;
+- enforced finite `NOW` commitments;
+- one Up-next Queue candidate;
+- one-at-a-time Inbox triage with Skip and Discard;
+- finite three-item Regroup sessions;
+- snooze that removes an active item from `NOW` and returns it only as a candidate;
+- local-calendar date handling for date-only deadlines;
+- searchable Everything view;
+- deterministic local handoff text for another person or AI tool;
+- JSON export;
+- responsive browser UI;
+- pure core logic with Node tests;
+- real Chromium behavior smoke covering capture → reload, triage, capacity and finite Regroup.
+
+## Experimental, not part of the portfolio proof
+
+The repository still contains an experimental authenticated/cloud path:
+
+- Firebase email/password authentication;
+- Firestore `harness-v3` storage isolated from the older board document;
+- browser BYOK calls to an OpenAI-compatible endpoint;
+- item-level AI helpers.
+
+These paths are **not** what the portfolio demo relies on. Browser-stored AI credentials are not positioned as hardened secret storage, and this project does not claim production-ready multi-device synchronization.
+
+### Source groups
+
+The Sources surface currently **groups already stored items by origin**. It does not yet connect Gmail, GitHub, calendars, Hermes or other agents, and it does not yet compress 60 external events into one decision.
+
+That is a product direction, not a shipped capability.
 
 ## Architecture
 
-The prototype deliberately remains small:
+The browser prototype is deliberately small:
 
-- `index.html` — static shell.
-- `styles.css` — manager interface and responsive layout.
-- `core.js` — pure workspace, migration, scoring, regroup and source-group logic.
-- `app.js` — browser controller and interaction layer.
-- `harness-db.js` — isolated Firestore persistence for the experiment.
-- `auth.js` / `db.js` — existing authentication and legacy storage compatibility.
+- `core.js` — pure item model, migration, commitment boundary, date logic, Regroup selection and grouping.
+- `app.js` — interaction/controller layer.
+- `runtime.js` — demo/runtime mode and single-writer lock.
+- `bootstrap.js` — loads Firebase only for the experimental cloud mode.
+- `harness-db.js` — immediate local demo persistence or isolated experimental Firestore persistence.
+- `index.html` / `styles.css` — interface.
+- `auth.js` / `db.js` — experimental auth and legacy compatibility boundary.
 
-There is still no framework, bundler or application backend.
+There is no framework or application backend in the portfolio demo.
 
 ## Run locally
 
@@ -78,16 +121,32 @@ There is still no framework, bundler or application backend.
 python3 -m http.server 8080
 ```
 
-Then open `http://localhost:8080`.
+Then open:
 
-## Tests
+```text
+http://localhost:8080/?demo=1
+```
+
+## Validation
 
 ```bash
 npm test
+bash tests/browser-smoke.sh
 ```
 
-CI also runs syntax checks and a real headless-Chrome runtime smoke test through the Chrome DevTools Protocol.
+The core suite covers commitment limits, migration, Regroup signals, source grouping, date-only calendar semantics, snooze/deferral and deterministic handoffs.
+
+The Chromium smoke verifies the actual portfolio flow, including:
+
+- demo boot without Firebase;
+- capture persisted across reload;
+- a full Light Desk rejecting a second commitment;
+- Inbox Skip revealing the next decision;
+- a five-candidate re-entry scenario producing exactly three Regroup decisions with no refill;
+- the demo writer lock being held.
 
 ## Product contract
 
-See [`LIFE_HARNESS.md`](LIFE_HARNESS.md). That document is intentionally more important than any individual UI implementation.
+[`LIFE_HARNESS.md`](LIFE_HARNESS.md) is the current product contract.
+
+`GENERAL_MANAGER_VNEXT.md` and `MIGRATION_PLAN.md` document earlier stages of the project and are retained as development history, not current product truth.

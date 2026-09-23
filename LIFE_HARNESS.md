@@ -121,6 +121,12 @@ The manager should make returning easier than avoiding it.
 5. Losing a connector must not make the core manager unusable.
 6. A future desktop build should earn its existence through OS integration, not wrapper chrome.
 
+## Portfolio proof boundary
+
+The public portfolio proof is the manual local demo using the same UI and core logic. It requires no account, Firebase request or model key. Cloud sync and BYOK AI remain experimental code paths and are not part of the claim that the core interaction model works.
+
+A Regroup session freezes at no more than three decisions when opened and does not refill until a new session begins. `NOW` capacity is enforced when state changes happen, not by hiding excess active commitments.
+
 ## Desktop direction
 A desktop version becomes justified when it can add primitives that the browser cannot provide cleanly:
 

@@ -109,7 +109,7 @@ function showSaveIndicator(state) {
   if (state === 'saving') {
     textEl.textContent = 'Saving...';
   } else if (state === 'saved') {
-    textEl.textContent = 'Synced';
+    textEl.textContent = window.GM_DEMO_MODE ? 'Saved locally' : 'Synced';
   } else if (state === 'error') {
     textEl.textContent = 'Offline / Error';
   }

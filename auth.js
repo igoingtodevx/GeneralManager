@@ -133,6 +133,10 @@ const authStateCallbacks = [];
 // Register callback to trigger on authentication state changes
 function onUserChanged(callback) {
   authStateCallbacks.push(callback);
+  if (window.GM_DEMO_MODE) {
+    callback({ uid: 'demo-local', email: '' });
+    return;
+  }
   // If user is already loaded/determined, fire callback immediately
   if (auth.currentUser !== undefined && auth.currentUser !== null) {
     callback(auth.currentUser);
@@ -256,21 +260,24 @@ function getFriendlyErrorMessage(error) {
   }
 }
 
-// Set auth persistence to local storage
-auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
-  .catch((err) => console.error("Error setting persistence:", err));
+if (!window.GM_DEMO_MODE) {
+  // Set auth persistence to local storage
+  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+    .catch((err) => console.error("Error setting persistence:", err));
 
-// Set up Auth state listener
-auth.onAuthStateChanged((user) => {
-  if (user) {
-    hideAuthModal();
-    notifyAuthState(user);
-  } else {
-    showAuthModal();
-    notifyAuthState(null);
-  }
-});
+  // Set up Auth state listener
+  auth.onAuthStateChanged((user) => {
+    if (user) {
+      hideAuthModal();
+      notifyAuthState(user);
+    } else {
+      showAuthModal();
+      notifyAuthState(null);
+    }
+  });
+}
 
 function signOutUser() {
+  if (window.GM_DEMO_MODE) return Promise.resolve();
   return auth.signOut();
 }

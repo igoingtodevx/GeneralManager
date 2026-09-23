@@ -5,10 +5,13 @@ import {
   EFFORTS,
   CAPACITY_SLOTS,
   createDefaultWorkspace,
+  createDemoWorkspace,
   normalizeWorkspace,
   normalizeItem,
   captureItem,
   setItemState,
+  canSetItemState,
+  activeCommitmentCount,
   duplicateItem,
   deskItems,
   inboxItems,
@@ -21,9 +24,10 @@ import {
   itemToHandoff,
   dueInfo,
   staleInfo,
+  isAvailable,
   makeId
 } from './core.js';
-import { loadUserHarness, saveUserHarness, saveUserHarnessImmediate } from './harness-db.js';
+import { loadUserHarness, saveUserHarness, saveUserHarnessImmediate, resetDemoHarness } from './harness-db.js';
 
 const LS_SETTINGS = 'gm_settings';
 const DAY = 86_400_000;
@@ -39,6 +43,10 @@ let commandIndex = 0;
 let commandEntries = [];
 let settings = loadSettings();
 let listenersReady = false;
+let regroupSessionEntries = [];
+let inboxSkipped = new Set();
+let overlayReturnFocus = null;
+let authGeneration = 0;
 
 function toast(message) {
   const region = $('toast-region');
@@ -68,10 +76,30 @@ function persistSettings() {
 }
 
 function saveWorkspace(immediate = false) {
-  if (!workspace || !currentUser) return;
+  if (!workspace || !currentUser) return false;
   workspace.meta.title = $('board-title')?.value.trim() || workspace.meta.title || 'General Manager';
-  const save = immediate ? saveUserHarnessImmediate : saveUserHarness;
-  save(currentUser.uid, workspace);
+  const save = window.GM_DEMO_MODE ? saveUserHarnessImmediate : (immediate ? saveUserHarnessImmediate : saveUserHarness);
+  try {
+    const result = save(currentUser.uid, workspace);
+    if (result?.catch && !window.GM_DEMO_MODE) result.catch(() => window.showSaveIndicator?.('error'));
+    return true;
+  } catch (error) {
+    console.error('Workspace save failed:', error);
+    window.showSaveIndicator?.('error');
+    toast(error.message || 'Could not save.');
+    return false;
+  }
+}
+
+function tryMoveItem(itemId, state, successMessage = '') {
+  const gate = canSetItemState(workspace, itemId, state);
+  if (!gate.ok) { toast(gate.reason); return false; }
+  const item = setItemState(workspace, itemId, state);
+  if (!item) return false;
+  if (!saveWorkspace()) return false;
+  renderAll();
+  if (successMessage) toast(successMessage);
+  return true;
 }
 
 function activeItem() {
@@ -100,8 +128,9 @@ function formatDue(item) {
   const date = new Date(info.timestamp);
   const text = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   if (info.overdue) return { text: `Date passed · ${text}`, className: 'overdue' };
-  if (info.ms <= DAY) return { text: `Today · ${text}`, className: 'due' };
-  if (info.ms <= 3 * DAY) return { text: `Soon · ${text}`, className: 'due' };
+  if (info.dateOnly && info.days === 0) return { text: `Today · ${text}`, className: 'due' };
+  if (info.dateOnly && info.days === 1) return { text: `Tomorrow · ${text}`, className: 'due' };
+  if (info.days <= 3) return { text: `Soon · ${text}`, className: 'due' };
   return { text, className: '' };
 }
 
@@ -111,7 +140,9 @@ function isTypingTarget(target) {
 
 function setView(view, persist = true) {
   if (!workspace) return;
+  const previousView = currentView;
   currentView = ['desk', 'inbox', 'everything', 'sources'].includes(view) ? view : 'desk';
+  if (currentView === 'inbox' && previousView !== 'inbox') inboxSkipped.clear();
   $$('.view').forEach(node => node.classList.add('hidden'));
   $(`${currentView}-view`)?.classList.remove('hidden');
   $$('.nav-tab').forEach(button => button.classList.toggle('active', button.dataset.view === currentView));
@@ -140,8 +171,12 @@ function renderNav() {
 
 function renderCapacity() {
   const mode = workspace.meta.capacityMode || 'NORMAL';
+  const limit = CAPACITY_SLOTS[mode] || 3;
+  const active = activeCommitmentCount(workspace);
   $$('#capacity-switch button').forEach(button => button.classList.toggle('active', button.dataset.capacity === mode));
-  $('capacity-copy').textContent = mode === 'LIGHT' ? 'One thing is enough.' : mode === 'FULL' ? 'Five things, still finite.' : 'Three things is enough.';
+  $('capacity-copy').textContent = active > limit
+    ? `${active} active commitments — reduce to ${limit}.`
+    : mode === 'LIGHT' ? 'One thing is enough.' : mode === 'FULL' ? 'Five things, still finite.' : 'Three things is enough.';
 }
 
 function createPill(text, className = '') {
@@ -187,20 +222,14 @@ function managerCard(item, index = 0) {
   done.textContent = 'Done';
   done.addEventListener('click', event => {
     event.stopPropagation();
-    setItemState(workspace, item.id, 'DONE');
-    saveWorkspace();
-    renderAll();
-    toast('Done. Off your desk.');
+    tryMoveItem(item.id, 'DONE', 'Done. Off your desk.');
   });
   const later = document.createElement('button');
   later.className = 'btn btn-quiet btn-sm';
   later.textContent = 'Not now';
   later.addEventListener('click', event => {
     event.stopPropagation();
-    setItemState(workspace, item.id, 'LATER');
-    saveWorkspace();
-    renderAll();
-    toast('Parked.');
+    tryMoveItem(item.id, 'LATER', 'Parked.');
   });
   actions.append(done, later);
 
@@ -232,7 +261,7 @@ function renderDesk() {
   const nextRoot = $('desk-next-list');
   nextRoot.replaceChildren();
   const nextCandidate = workspace.items
-    .filter(item => item.state === 'QUEUE')
+    .filter(item => item.state === 'QUEUE' && isAvailable(item))
     .sort((a, b) => (b.priority === 'HIGH') - (a.priority === 'HIGH') || b.updatedAt - a.updatedAt)[0];
   if (nextCandidate) {
     const row = document.createElement('button');
@@ -250,10 +279,7 @@ function renderDesk() {
     action.textContent = 'Bring to desk →';
     row.append(copy, action);
     row.addEventListener('click', () => {
-      setItemState(workspace, nextCandidate.id, 'NOW');
-      saveWorkspace();
-      renderAll();
-      toast('Moved to your desk.');
+      tryMoveItem(nextCandidate.id, 'NOW', 'Moved to your desk.');
     });
     nextRoot.appendChild(row);
   } else {
@@ -270,32 +296,25 @@ function renderDesk() {
   if (!brief.length) brief.push('Nothing is asking for cleanup');
   $('manager-brief').textContent = brief.join(' · ');
 
-  const attention = regroupCandidates(workspace).slice(0, 4);
+  const attention = regroupCandidates(workspace);
+  const attentionSection = $('attention-section');
   const attentionRoot = $('desk-attention-list');
   attentionRoot.replaceChildren();
-  if (!attention.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-card';
-    empty.innerHTML = '<strong>No cleanup pressure.</strong>Nothing currently needs a regroup decision.';
-    attentionRoot.appendChild(empty);
-  } else {
-    attention.forEach(entry => {
-      const row = document.createElement('div');
-      row.className = 'attention-row';
-      const reason = document.createElement('span');
-      reason.className = 'attention-reason';
-      reason.textContent = entry.reason;
-      const copy = document.createElement('div');
-      copy.className = 'attention-copy';
-      const title = document.createElement('strong');
-      title.textContent = entry.item.title;
-      const next = document.createElement('span');
-      next.textContent = entry.item.nextAction || `Currently ${stateLabel(entry.item.state)}`;
-      copy.append(title, next);
-      row.append(reason, copy);
-      row.addEventListener('click', () => openInspector(entry.item.id));
-      attentionRoot.appendChild(row);
-    });
+  attentionSection.classList.toggle('hidden', attention.length === 0);
+  if (attention.length) {
+    const row = document.createElement('button');
+    row.className = 'reentry-invite';
+    const copy = document.createElement('span');
+    const title = document.createElement('strong');
+    { const count = Math.min(3, attention.length); title.textContent = `Review up to ${count} ${count === 1 ? 'thing' : 'things'}`; }
+    const note = document.createElement('small');
+    note.textContent = 'A short session. Nothing else has to be cleaned up first.';
+    copy.append(title, note);
+    const action = document.createElement('span');
+    action.textContent = 'Regroup →';
+    row.append(copy, action);
+    row.addEventListener('click', openRegroup);
+    attentionRoot.appendChild(row);
   }
 
   const hidden = stats.hiddenFromDesk;
@@ -311,16 +330,35 @@ function renderDesk() {
 
 function renderInbox() {
   if (!workspace) return;
-  const items = inboxItems(workspace);
-  $('inbox-count').textContent = items.length ? `${items.length} captured` : 'Inbox clear';
+  const allItems = inboxItems(workspace);
+  const items = allItems.filter(item => !inboxSkipped.has(item.id));
+  $('inbox-count').textContent = allItems.length ? `${allItems.length} captured` : 'Inbox clear';
   const stage = $('triage-stage');
   stage.replaceChildren();
   $('inbox-tail').textContent = '';
 
+  if (!allItems.length) {
+    inboxSkipped.clear();
+    const empty = document.createElement('div');
+    empty.className = 'empty-card';
+    empty.innerHTML = '<strong>Inbox clear.</strong> Capture freely. You do not have to maintain emptiness as a streak.';
+    stage.appendChild(empty);
+    return;
+  }
+
   if (!items.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-card';
-    empty.innerHTML = '<strong>Inbox clear.</strong>Capture freely. You do not have to maintain emptiness as a streak.';
+    const title = document.createElement('strong');
+    title.textContent = 'That is enough triage for now.';
+    const copy = document.createElement('div');
+    copy.textContent = `${allItems.length} skipped item${allItems.length === 1 ? '' : 's'} stay safely in Inbox.`;
+    const reset = document.createElement('button');
+    reset.className = 'btn btn-quiet btn-sm';
+    reset.style.marginTop = '12px';
+    reset.textContent = 'Review skipped items';
+    reset.addEventListener('click', () => { inboxSkipped.clear(); renderInbox(); });
+    empty.append(title, copy, reset);
     stage.appendChild(empty);
     return;
   }
@@ -330,7 +368,7 @@ function renderInbox() {
   card.className = 'triage-card';
   const eyebrow = document.createElement('div');
   eyebrow.className = 'eyebrow';
-  eyebrow.textContent = `${kindLabel(item.kind)} · captured ${relativeTime(item.createdAt)}`;
+  eyebrow.textContent = `Captured ${relativeTime(item.createdAt)}`;
   const title = document.createElement('h2');
   title.textContent = item.title;
   const context = document.createElement('div');
@@ -338,37 +376,53 @@ function renderInbox() {
   context.textContent = item.notes || item.nextAction || 'No extra context. That is okay.';
 
   const actions = document.createElement('div');
-  actions.className = 'triage-actions';
+  actions.className = 'triage-actions four';
   [
     ['NOW', 'Now'],
     ['QUEUE', 'Queue'],
     ['WAITING', 'Waiting'],
-    ['LATER', 'Later'],
-    ['DONE', 'Done']
+    ['LATER', 'Keep']
   ].forEach(([state, label]) => {
     const button = document.createElement('button');
     button.className = state === 'NOW' ? 'btn btn-primary' : 'btn';
     button.textContent = label;
     button.addEventListener('click', () => {
-      setItemState(workspace, item.id, state);
-      saveWorkspace();
-      renderAll();
+      if (!tryMoveItem(item.id, state)) return;
+      inboxSkipped.delete(item.id);
       if (state === 'WAITING') openInspector(item.id);
     });
     actions.appendChild(button);
   });
 
+  const explanation = document.createElement('div');
+  explanation.className = 'triage-explanation';
+  explanation.textContent = 'Queue = consider next · Keep = store without asking for attention.';
+
+  const secondary = document.createElement('div');
+  secondary.className = 'triage-secondary';
+  const skip = document.createElement('button');
+  skip.className = 'btn btn-quiet btn-sm';
+  skip.textContent = 'Skip for this pass';
+  skip.addEventListener('click', () => { inboxSkipped.add(item.id); renderInbox(); });
+  const discard = document.createElement('button');
+  discard.className = 'btn btn-quiet btn-sm danger-link';
+  discard.textContent = 'Discard';
+  discard.addEventListener('click', () => {
+    if (!confirm(`Discard “${item.title}”? This removes it instead of counting it as done.`)) return;
+    workspace.items = workspace.items.filter(candidate => candidate.id !== item.id);
+    inboxSkipped.delete(item.id);
+    if (!saveWorkspace()) return;
+    renderAll();
+  });
   const edit = document.createElement('button');
   edit.className = 'btn btn-quiet btn-sm';
-  edit.textContent = 'Open details instead';
+  edit.textContent = 'Open details';
   edit.addEventListener('click', () => openInspector(item.id));
-  const help = document.createElement('div');
-  help.className = 'triage-help';
-  help.append(edit);
+  secondary.append(skip, edit, discard);
 
-  card.append(eyebrow, title, context, actions, help);
+  card.append(eyebrow, title, context, actions, explanation, secondary);
   stage.appendChild(card);
-  if (items.length > 1) $('inbox-tail').textContent = `${items.length - 1} more stay hidden until you decide this one.`;
+  if (items.length > 1) $('inbox-tail').textContent = `${items.length - 1} more stay hidden until you decide or skip this one.`;
 }
 
 function renderEverything() {
@@ -469,11 +523,14 @@ function captureQuick() {
   if (!raw) return;
   const looksLikeUrl = /^https?:\/\//i.test(raw);
   const kind = looksLikeUrl ? 'REFERENCE' : 'TASK';
-  captureItem(workspace, { title: raw, kind, sourceUrl: looksLikeUrl ? raw : '' });
+  const item = captureItem(workspace, { title: raw, kind, sourceUrl: looksLikeUrl ? raw : '' });
+  if (!saveWorkspace()) {
+    workspace.items = workspace.items.filter(candidate => candidate.id !== item.id);
+    return;
+  }
   input.value = '';
-  saveWorkspace();
   renderAll();
-  toast('Captured. No organizing required.');
+  toast(window.GM_DEMO_MODE ? 'Captured and saved locally.' : 'Captured. No organizing required.');
 }
 
 function populateInspectorSelects() {
@@ -531,13 +588,23 @@ function closeInspector() {
 function syncInspectorField(field, value) {
   const item = activeItem();
   if (!item) return;
-  if (field === 'state') setItemState(workspace, item.id, value);
-  else item[field] = value;
-  item.updatedAt = Date.now();
-  saveWorkspace();
+  if (field === 'state') {
+    const gate = canSetItemState(workspace, item.id, value);
+    if (!gate.ok) {
+      toast(gate.reason);
+      $('item-state').value = item.state;
+      return;
+    }
+    setItemState(workspace, item.id, value);
+  } else {
+    item[field] = value;
+    item.updatedAt = Date.now();
+  }
+  const saved = saveWorkspace(window.GM_DEMO_MODE);
   renderAll();
-  $('inspector-status').textContent = 'Saving…';
-  setTimeout(() => { if (activeItemId) $('inspector-status').textContent = 'Autosaved'; }, 650);
+  $('inspector-status').textContent = saved
+    ? (window.GM_DEMO_MODE ? 'Saved locally' : 'Saving…')
+    : 'Save failed';
 }
 
 function renderChecklist(item) {
@@ -605,28 +672,48 @@ async function copyText(text, message = 'Copied') {
 }
 
 function openOverlay(id) {
+  overlayReturnFocus = document.activeElement;
   $(id)?.classList.remove('hidden');
   if (id === 'settings-overlay') renderSettings();
   if (id === 'regroup-overlay') renderRegroup();
+  setTimeout(() => $(id)?.querySelector('button, input, [tabindex="0"]')?.focus(), 0);
 }
 
 function closeOverlay(id) {
   $(id)?.classList.add('hidden');
   if (id === 'regroup-overlay' && workspace) {
     workspace.meta.lastRegroupAt = Date.now();
-    saveWorkspace();
+    regroupSessionEntries = [];
+    saveWorkspace(window.GM_DEMO_MODE);
   }
+  const target = overlayReturnFocus;
+  overlayReturnFocus = null;
+  if (target?.isConnected) setTimeout(() => target.focus(), 0);
+}
+
+function openRegroup() {
+  if (!workspace) return;
+  regroupSessionEntries = regroupCandidates(workspace).slice(0, 3).map(entry => ({ id: entry.item.id, reason: entry.reason }));
+  openOverlay('regroup-overlay');
+}
+
+function finishRegroupEntry(id) {
+  regroupSessionEntries = regroupSessionEntries.filter(entry => entry.id !== id);
+  renderAll();
+  renderRegroup();
 }
 
 function renderRegroup() {
-  const entries = regroupCandidates(workspace);
+  const entries = regroupSessionEntries
+    .map(entry => ({ ...entry, item: workspace.items.find(item => item.id === entry.id) }))
+    .filter(entry => entry.item);
   const root = $('regroup-list');
   root.replaceChildren();
   if (!entries.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-card';
     empty.style.margin = '0 20px 18px';
-    empty.innerHTML = '<strong>Nothing needs a regroup.</strong>You can close this and keep going.';
+    empty.innerHTML = '<strong>Regroup complete.</strong> You do not have to catch up on anything else.';
     root.appendChild(empty);
   } else {
     entries.forEach(entry => {
@@ -644,24 +731,39 @@ function renderRegroup() {
       copy.append(title, next);
       const actions = document.createElement('div');
       actions.className = 'regroup-actions';
+
       [['NOW', 'Now'], ['QUEUE', 'Queue'], ['LATER', 'Later'], ['DONE', 'Done']].forEach(([state, label]) => {
         const button = document.createElement('button');
         button.className = `btn btn-sm${state === 'NOW' ? ' btn-primary' : ''}`;
         button.textContent = label;
         button.addEventListener('click', () => {
+          const gate = canSetItemState(workspace, entry.item.id, state);
+          if (!gate.ok) { toast(gate.reason); return; }
           setItemState(workspace, entry.item.id, state);
-          saveWorkspace();
-          renderAll();
-          renderRegroup();
+          if (state === 'QUEUE') entry.item.reviewAfter = new Date(Date.now() + 3 * DAY).toISOString();
+          if (state === 'LATER') entry.item.reviewAfter = new Date(Date.now() + 7 * DAY).toISOString();
+          if (!saveWorkspace(window.GM_DEMO_MODE)) return;
+          finishRegroupEntry(entry.item.id);
         });
         actions.appendChild(button);
       });
+
+      const keep = document.createElement('button');
+      keep.className = 'btn btn-quiet btn-sm';
+      keep.textContent = 'Keep for now';
+      keep.addEventListener('click', () => {
+        entry.item.reviewAfter = new Date(Date.now() + 3 * DAY).toISOString();
+        entry.item.updatedAt = Date.now();
+        if (!saveWorkspace(window.GM_DEMO_MODE)) return;
+        finishRegroupEntry(entry.item.id);
+      });
+      actions.appendChild(keep);
       row.append(reason, copy, actions);
       root.appendChild(row);
     });
   }
   const stats = briefStats(workspace);
-  $('regroup-footer-copy').textContent = `${entries.length} decision${entries.length === 1 ? '' : 's'} surfaced. ${stats.hiddenFromDesk} other unresolved items stay safely out of sight.`;
+  $('regroup-footer-copy').textContent = `${entries.length} decision${entries.length === 1 ? '' : 's'} left in this session. ${stats.hiddenFromDesk} other unresolved items stay out of sight.`;
 }
 
 function renderSettings() {
@@ -706,7 +808,7 @@ function aiContext(item) {
   };
 }
 
-function renderAIOutput(text, action) {
+function renderAIOutput(text, action, itemId) {
   const root = $('ai-item-output');
   root.classList.remove('hidden');
   root.replaceChildren();
@@ -725,7 +827,7 @@ function renderAIOutput(text, action) {
     apply.className = 'btn btn-primary btn-sm';
     apply.textContent = 'Use as next move';
     apply.addEventListener('click', () => {
-      const item = activeItem();
+      const item = workspace?.items.find(candidate => candidate.id === itemId);
       if (!item) return;
       item.nextAction = text.replace(/^[-–—•\s]+/, '').trim();
       item.updatedAt = Date.now();
@@ -740,7 +842,7 @@ function renderAIOutput(text, action) {
     apply.className = 'btn btn-primary btn-sm';
     apply.textContent = 'Replace context';
     apply.addEventListener('click', () => {
-      const item = activeItem();
+      const item = workspace?.items.find(candidate => candidate.id === itemId);
       if (!item) return;
       item.notes = text;
       item.updatedAt = Date.now();
@@ -758,6 +860,11 @@ async function runItemAI(action) {
   if (!item) return;
   const root = $('ai-item-output');
   root.classList.remove('hidden');
+  if (window.GM_DEMO_MODE) {
+    root.textContent = 'AI is disabled in the portfolio demo. The core workflow is fully manual.';
+    return;
+  }
+  const requestItemId = item.id;
   root.textContent = 'Thinking…';
   const context = JSON.stringify(aiContext(item), null, 2);
   const prompts = {
@@ -771,7 +878,8 @@ async function runItemAI(action) {
       { role: 'system', content: prompts[action] },
       { role: 'user', content: context }
     ], action === 'smaller' ? 180 : action === 'resume' ? 450 : 850);
-    renderAIOutput(text, action);
+    if (activeItemId !== requestItemId) return;
+    renderAIOutput(text, action, requestItemId);
   } catch (error) {
     root.textContent = `AI unavailable: ${error.message}`;
   }
@@ -794,8 +902,9 @@ function renderCommandResults() {
   const actions = [
     { label: 'Go to Desk', meta: 'view', run: () => setView('desk') },
     { label: 'Open Inbox', meta: 'view', run: () => setView('inbox') },
-    { label: 'Regroup', meta: 're-entry', run: () => openOverlay('regroup-overlay') },
-    { label: 'Capture something', meta: 'action', run: () => { setView('desk'); setTimeout(() => $('quick-input').focus(), 0); } }
+    { label: 'Regroup', meta: 're-entry', run: openRegroup },
+    { label: 'Capture something', meta: 'action', run: () => { setView('desk'); setTimeout(() => $('quick-input').focus(), 0); } },
+    { label: 'Source groups', meta: 'experimental view', run: () => setView('sources') }
   ];
   const matchingActions = actions.filter(entry => !query || entry.label.toLowerCase().includes(query));
   const matchingItems = workspace.items
@@ -842,20 +951,21 @@ function exportData() {
 }
 
 async function importData(file) {
+  if (window.GM_DEMO_MODE) throw new Error('Import is disabled in the portfolio demo.');
   const text = await file.text();
   const payload = JSON.parse(text);
-  const incoming = normalizeWorkspace(payload.workspace || payload);
-  const replace = confirm('Replace the current harness with this import? Press Cancel to merge instead.');
-  if (replace) {
-    workspace = incoming;
-  } else {
-    const existing = new Set(workspace.items.map(item => item.id));
-    incoming.items.forEach(item => workspace.items.push(existing.has(item.id) ? normalizeItem({ ...item, id: makeId() }) : item));
+  const candidate = payload.workspace || payload;
+  if (!candidate || typeof candidate !== 'object' || (!Array.isArray(candidate.items) && !Array.isArray(candidate.cards))) {
+    throw new Error('This file is not a General Manager workspace export.');
   }
+  const incoming = normalizeWorkspace(candidate);
+  const replace = confirm('Replace the current workspace with this validated import? Cancel leaves everything unchanged.');
+  if (!replace) return;
+  workspace = incoming;
   await saveUserHarnessImmediate(currentUser.uid, workspace);
   renderAll();
   setView(workspace.meta.preferredView || 'desk', false);
-  toast(replace ? 'Import replaced workspace' : 'Import merged');
+  toast('Import replaced workspace');
 }
 
 function attachListeners() {
@@ -868,13 +978,21 @@ function attachListeners() {
 
   $$('#capacity-switch button').forEach(button => button.addEventListener('click', () => {
     if (!workspace) return;
-    workspace.meta.capacityMode = button.dataset.capacity;
-    saveWorkspace();
+    const nextMode = button.dataset.capacity;
+    const limit = CAPACITY_SLOTS[nextMode] || 3;
+    const active = activeCommitmentCount(workspace);
+    if (active > limit) {
+      toast(`You already have ${active} active commitments. Move ${active - limit} off the desk first.`);
+      return;
+    }
+    workspace.meta.capacityMode = nextMode;
+    saveWorkspace(window.GM_DEMO_MODE);
     renderAll();
   }));
 
-  $('regroup-btn').addEventListener('click', () => openOverlay('regroup-overlay'));
-  $('attention-regroup-btn').addEventListener('click', () => openOverlay('regroup-overlay'));
+  $('regroup-btn').addEventListener('click', openRegroup);
+  $('regroup-done-btn').addEventListener('click', () => { closeOverlay('regroup-overlay'); setView('desk'); });
+  $('sources-link-btn').addEventListener('click', () => setView('sources'));
   $('search-btn').addEventListener('click', openCommand);
   $('settings-btn').addEventListener('click', () => openOverlay('settings-overlay'));
   $('inspector-close').addEventListener('click', closeInspector);
@@ -899,34 +1017,31 @@ function attachListeners() {
     const item = activeItem();
     if (!item) return;
     const copy = duplicateItem(workspace, item.id);
-    saveWorkspace();
+    saveWorkspace(window.GM_DEMO_MODE);
     renderAll();
     openInspector(copy.id);
   });
   $('snooze-item-btn').addEventListener('click', () => {
     const item = activeItem();
     if (!item) return;
+    if (item.state === 'NOW') setItemState(workspace, item.id, 'QUEUE');
     item.snoozedUntil = new Date(Date.now() + DAY).toISOString();
     item.updatedAt = Date.now();
-    saveWorkspace();
+    if (!saveWorkspace(window.GM_DEMO_MODE)) return;
     renderAll();
     closeInspector();
-    toast('Out of sight until tomorrow.');
+    toast('Out of sight until tomorrow. It will return as a candidate, not a commitment.');
   });
   $('complete-item-btn').addEventListener('click', () => {
     const item = activeItem();
     if (!item) return;
-    setItemState(workspace, item.id, 'DONE');
-    saveWorkspace();
-    renderAll();
-    closeInspector();
-    toast('Done.');
+    if (tryMoveItem(item.id, 'DONE', 'Done.')) closeInspector();
   });
   $('delete-item-btn').addEventListener('click', () => {
     const item = activeItem();
     if (!item || !confirm(`Delete “${item.title}” permanently?`)) return;
     workspace.items = workspace.items.filter(candidate => candidate.id !== item.id);
-    saveWorkspace();
+    saveWorkspace(window.GM_DEMO_MODE);
     renderAll();
     closeInspector();
   });
@@ -947,7 +1062,12 @@ function attachListeners() {
   });
 
   $('export-btn').addEventListener('click', exportData);
-  $('import-btn').addEventListener('click', () => $('import-file').click());
+  $('reset-demo-btn').addEventListener('click', () => {
+    if (!window.GM_DEMO_MODE || !confirm('Reset the local demo to its synthetic starting data?')) return;
+    resetDemoHarness();
+    location.reload();
+  });
+  $('import-btn').addEventListener('click', () => { if (!window.GM_DEMO_MODE) $('import-file').click(); });
   $('import-file').addEventListener('change', async event => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -990,33 +1110,87 @@ function attachListeners() {
   });
 }
 
-async function bootstrapForUser(user) {
+function showDemoLockOverlay() {
+  if ($('demo-lock-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'demo-lock-overlay';
+  overlay.className = 'overlay';
+  const card = document.createElement('div');
+  card.className = 'modal demo-lock-modal';
+  card.innerHTML = '<div class="modal-head"><div><span class="eyebrow">Local demo</span><h2>Already open in another tab.</h2></div></div><p class="modal-lede">To prevent two tabs from overwriting the same local workspace, this tab stays read-only. Close the other General Manager demo tab, then reload this one.</p>';
+  const footer = document.createElement('div');
+  footer.className = 'modal-footer';
+  const reload = document.createElement('button');
+  reload.className = 'btn btn-primary';
+  reload.textContent = 'Reload';
+  reload.addEventListener('click', () => location.reload());
+  footer.appendChild(reload);
+  card.appendChild(footer);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+}
+
+function applyDemoChrome() {
+  if (!window.GM_DEMO_MODE) return;
+  document.body.classList.add('demo-mode');
+  $('demo-badge')?.classList.remove('hidden');
+  $('demo-mode-note')?.classList.remove('hidden');
+  $$('.demo-only').forEach(node => node.classList.remove('hidden'));
+  $$('.demo-disabled').forEach(node => node.classList.add('hidden'));
+  $('logout-btn')?.classList.add('hidden');
+  if ($('storage-note')) $('storage-note').textContent = 'Local portfolio demo. Data stays in this browser and is not backed up to the cloud.';
+}
+
+async function bootstrapForUser(user, generation) {
   currentUser = user;
+  applyDemoChrome();
   $('user-email').textContent = user.email || '';
+
+  if (window.GM_DEMO_MODE) {
+    await window.GM_DEMO_LOCK_READY;
+    if (generation !== authGeneration || currentUser?.uid !== user.uid) return;
+    if (window.GM_DEMO_READ_ONLY) {
+      showDemoLockOverlay();
+      return;
+    }
+  }
+
   let stored = await loadUserHarness(user.uid);
+  if (generation !== authGeneration || currentUser?.uid !== user.uid) return;
+
   if (!stored) {
-    const legacy = await window.loadUserData?.(user.uid).catch(() => ({ board: null, archive: [] }));
-    workspace = normalizeWorkspace(legacy?.board || createDefaultWorkspace());
-    workspace.meta.seededFromLegacy = !!legacy?.board;
-    workspace.meta.seededAt = Date.now();
-    await saveUserHarnessImmediate(user.uid, workspace);
+    if (window.GM_DEMO_MODE) {
+      workspace = createDemoWorkspace();
+      workspace.meta.seededAt = Date.now();
+      await saveUserHarnessImmediate(user.uid, workspace);
+    } else {
+      const legacy = await window.loadUserData?.(user.uid).catch(() => ({ board: null, archive: [] }));
+      if (generation !== authGeneration || currentUser?.uid !== user.uid) return;
+      workspace = normalizeWorkspace(legacy?.board || createDefaultWorkspace());
+      workspace.meta.seededFromLegacy = !!legacy?.board;
+      workspace.meta.seededAt = Date.now();
+      await saveUserHarnessImmediate(user.uid, workspace);
+    }
   } else {
     workspace = normalizeWorkspace(stored);
   }
+
+  if (generation !== authGeneration || currentUser?.uid !== user.uid) return;
   const previousOpen = workspace.meta.lastOpenedAt;
   workspace.meta.lastOpenedAt = Date.now();
   renderAll();
   setView(workspace.meta.preferredView || 'desk', false);
-  saveWorkspace();
+  saveWorkspace(window.GM_DEMO_MODE);
 
   if (previousOpen && Date.now() - previousOpen > 36 * 60 * 60 * 1000 && regroupCandidates(workspace).length) {
-    setTimeout(() => openOverlay('regroup-overlay'), 350);
+    setTimeout(() => toast('Welcome back. A short Regroup is available when useful.'), 350);
   }
 }
 
 attachListeners();
 
 window.onUserChanged?.(async user => {
+  const generation = ++authGeneration;
   if (!user) {
     currentUser = null;
     workspace = null;
@@ -1024,8 +1198,9 @@ window.onUserChanged?.(async user => {
     return;
   }
   try {
-    await bootstrapForUser(user);
+    await bootstrapForUser(user, generation);
   } catch (error) {
+    if (generation !== authGeneration) return;
     console.error('Failed to bootstrap General Manager harness:', error);
     toast('Could not load the manager workspace.');
   }
